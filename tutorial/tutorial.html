@@ -556,7 +556,7 @@ copying must be safely cancelable at any moment.</li>
 more producers insert data on a shared data structure like a queue or buffer
 while one or more consumers extract data from it. Readers and writers run
 concurrently. If the queue is empty then readers will block until data is
-available, if the queue is full then writers will wait for some ‘socket’ to be
+available, if the queue is full then writers will wait for some ‘bucket’ to be
 free. Only one writer at a time can add data to the queue to prevent data
 corruption. Also only one reader can extract data from the queue so no two
 readers get the same data item.</p>
@@ -578,11 +578,14 @@ to create concurrent code. However, they are <em>not</em> threads. Spawning new 
 does not guarantee that the action described in the <code class="highlighter-rouge">F</code> associated to it will be
 run if there is a shortage of threads. Internally cats-effect uses thread pools
 to run fibers. So if there is no thread available in the pool then the fiber
-execution will ‘wait’ until some thread is free again. <code class="highlighter-rouge">ContextShift[F]</code> is in
-charge of assigning threads to the fibers waiting to be run. When using <code class="highlighter-rouge">IOApp</code>
-we get also the <code class="highlighter-rouge">ContextShift[IO]</code> that we need to run the fibers in our code.
-But the developer can create new <code class="highlighter-rouge">ContextShift[F]</code> instances using custom thread
-pools.</p>
+execution will ‘wait’ until some thread is free again. On the other hand fibers
+are, unlike threads, very cheap entities. We can spawn millions of them at ease
+without impacting the performance.</p>
+
+<p><code class="highlighter-rouge">ContextShift[F]</code> is in charge of assigning threads to the fibers waiting to be
+run. When using <code class="highlighter-rouge">IOApp</code> we get also the <code class="highlighter-rouge">ContextShift[IO]</code> that we need to run
+the fibers in our code.  But the developer can also create new <code class="highlighter-rouge">ContextShift[F]</code>
+instances using custom thread pools.</p>
 
 <p>Cats-effect implements some concurrency primitives to coordinate concurrent
 fibers: <a href="https://typelevel.org/cats-effect/concurrency/deferred.html">Deferred</a>,
@@ -607,7 +610,7 @@ this tutorial we will focus on a practical approach to those concepts.</p>
 <p>Ok, now we have briefly discussed fibers we can start working on our
 producer-consumer problem.</p>
 
-<h3 id="first-and-inefficient-implementation">First and inefficient implementation</h3>
+<h3 id="first-and-inefficient-implementation">First (and inefficient) implementation</h3>
 <p>We need an intermediate structure where producer(s) can insert data to and
 consumer(s) extracts data from. Let’s assume a simple queue. Initially there
 will be only one producer and one consumer. Producer will generate a sequence of
@@ -640,11 +643,11 @@ method of the <code class="highlighter-rouge">Ref</code> instance will be blocke
 </code></pre></div></div>
 
 <p>First line just prints some log message every <code class="highlighter-rouge">10000</code> items, so we know if it is
-‘alive’. Then it calls <code class="highlighter-rouge">queueR</code>.getAndUpdate<code class="highlighter-rouge"> to add data into the queue. Note
-that </code>.getAndUpdate<code class="highlighter-rouge"> provides the current queue, then we use </code>.enqueue<code class="highlighter-rouge"> to
-insert the next value </code>counter+1<code class="highlighter-rouge">. This call returns a new queue with the value
+‘alive’. Then it calls <code class="highlighter-rouge">queueR.getAndUpdate</code> to add data into the queue. Note
+that <code class="highlighter-rouge">.getAndUpdate</code> provides the current queue, then we use <code class="highlighter-rouge">.enqueue</code> to
+insert the next value <code class="highlighter-rouge">counter+1</code>. This call returns a new queue with the value
 added that is stored by the ref instance. If some other fiber is accessing to
-</code>queueR` then the fiber is blocked.</p>
+<code class="highlighter-rouge">queueR</code> then the fiber is blocked.</p>
 
 <p>Finally we run <code class="highlighter-rouge">ContextShift[F].shift</code> before calling again to the producer
 recursively with the next counter value. In fact, the call to <code class="highlighter-rouge">.shift</code> is not
@@ -764,7 +767,7 @@ obtained, later to be released when the critical section is left.</p>
 <p>In our producer/consumer code we already protect access to the queue (our shared
 resource) using a <code class="highlighter-rouge">Ref</code>. But we can use semaphores on top of that to signal
 whether there are elements in the queue or not. This can be done by keeping in
-the semaphore a counter of <code class="highlighter-rouge">filled</code> sockets, which will be increased when adding
+the semaphore a counter of <code class="highlighter-rouge">filled</code> buckets, which will be increased when adding
 elements to the queue, and decreased when elements are removed. Consumer code
 will be changed so it blocks when there are no elements to be retrieved
 (<code class="highlighter-rouge">filled</code> has zero permits).</p>
@@ -847,10 +850,10 @@ size is reached producers will block as they consumers do when the queue is
 empty.</p>
 
 <h3 id="producer-consumer-with-bounded-queue">Producer consumer with bounded queue</h3>
-<p>We will use another semaphore <code class="highlighter-rouge">empty</code> to represent the amount of empty ‘sockets’
+<p>We will use another semaphore <code class="highlighter-rouge">empty</code> to represent the amount of empty ‘buckets’
 in the queue. It will mirror the behavior of <code class="highlighter-rouge">filled</code>. When a new item is
-enqueued a call to <code class="highlighter-rouge">empty.release</code> will signal that there is a new empty socket
-in the queue. Likewise, the producers will request an empty socket by calling
+enqueued a call to <code class="highlighter-rouge">empty.release</code> will signal that there is a new empty bucket
+in the queue. Likewise, the producers will request an empty bucket by calling
 <code class="highlighter-rouge">empty.acquire</code> prior to add new elements, blocking when <code class="highlighter-rouge">empty</code> number of
 permits is zero.</p>
 
@@ -865,7 +868,7 @@ permits is zero.</p>
 <span class="k">def</span> <span class="n">producer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span><span class="kt">:</span> <span class="kt">Sync:</span> <span class="kt">ContextShift</span><span class="o">](</span><span class="n">id</span><span class="k">:</span> <span class="kt">Int</span><span class="o">,</span> <span class="n">queueR</span><span class="k">:</span> <span class="kt">Ref</span><span class="o">[</span><span class="kt">F</span>, <span class="kt">Queue</span><span class="o">[</span><span class="kt">Int</span><span class="o">]],</span> <span class="n">counterR</span><span class="k">:</span> <span class="kt">Ref</span><span class="o">[</span><span class="kt">F</span>, <span class="kt">Int</span><span class="o">],</span> <span class="n">empty</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">],</span> <span class="n">filled</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
   <span class="o">(</span><span class="k">for</span> <span class="o">{</span>
     <span class="n">i</span> <span class="k">&lt;-</span> <span class="n">counterR</span><span class="o">.</span><span class="n">getAndUpdate</span><span class="o">(</span><span class="k">_</span> <span class="o">+</span> <span class="mi">1</span><span class="o">)</span>
-    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">empty</span><span class="o">.</span><span class="n">acquire</span>  <span class="c1">// Wait for some socket free in queue
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">empty</span><span class="o">.</span><span class="n">acquire</span>  <span class="c1">// Wait for some bucket free in queue
 </span>    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">queueR</span><span class="o">.</span><span class="n">getAndUpdate</span><span class="o">(</span><span class="k">_</span><span class="o">.</span><span class="n">enqueue</span><span class="o">(</span><span class="n">i</span><span class="o">))</span>
     <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">filled</span><span class="o">.</span><span class="n">release</span> <span class="c1">// Signal new item in queue
 </span>    <span class="k">_</span> <span class="k">&lt;-</span> <span class="k">if</span><span class="o">(</span><span class="n">i</span> <span class="o">%</span> <span class="mi">10000</span> <span class="o">==</span> <span class="mi">0</span><span class="o">)</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Producer $id has reached $i items"</span><span class="o">))</span> <span class="k">else</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">unit</span>
@@ -876,7 +879,7 @@ permits is zero.</p>
   <span class="o">(</span><span class="k">for</span> <span class="o">{</span>
     <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">filled</span><span class="o">.</span><span class="n">acquire</span> <span class="c1">// Wait for some item in queue
 </span>    <span class="n">i</span> <span class="k">&lt;-</span> <span class="n">queueR</span><span class="o">.</span><span class="n">modify</span><span class="o">(</span><span class="k">_</span><span class="o">.</span><span class="n">dequeue</span><span class="o">.</span><span class="n">swap</span><span class="o">)</span>
-    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">empty</span><span class="o">.</span><span class="n">release</span>  <span class="c1">// Signal new socket free in queue
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">empty</span><span class="o">.</span><span class="n">release</span>  <span class="c1">// Signal new bucket free in queue
 </span>    <span class="k">_</span> <span class="k">&lt;-</span> <span class="k">if</span><span class="o">(</span><span class="n">i</span> <span class="o">%</span> <span class="mi">10000</span> <span class="o">==</span> <span class="mi">0</span><span class="o">)</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Consumer $id has reached $i items"</span><span class="o">))</span> <span class="k">else</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">unit</span>
     <span class="k">_</span> <span class="k">&lt;-</span> <span class="nc">ContextShift</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">shift</span>
   <span class="o">}</span> <span class="k">yield</span> <span class="o">())</span> <span class="o">&gt;&gt;</span> <span class="n">consumer</span><span class="o">(</span><span class="n">id</span><span class="o">,</span> <span class="n">queueR</span><span class="o">,</span> <span class="n">empty</span><span class="o">,</span> <span class="n">filled</span><span class="o">)</span>
@@ -926,7 +929,7 @@ about the consequences (the program has terminated after all). But in more
 complex settings we have to be careful as any other fiber could cancel any
 producer or consumer at any time. And which will then be the consequences? Well,
 basically we would not be able to trust our semaphores to represent the amount
-of items and free sockets in the queue. See for example the code of a consumer
+of items and free buckets in the queue. See for example the code of a consumer
 in our bounded queue setting. It must make sure that whenever a <code class="highlighter-rouge">filled</code> permit
 is acquired then a) a new element is added and b) <code class="highlighter-rouge">empty.release</code> is called. A
 cancellation right before those actions will leave the semaphores with values
