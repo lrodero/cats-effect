@@ -427,12 +427,12 @@ arguments, an error is raised. As <code class="highlighter-rouge">IO</code> impl
 moment call to <code class="highlighter-rouge">IO.raiseError</code> to interrupt a sequence of <code class="highlighter-rouge">IO</code> operations.</p>
 
 <h4 id="copy-program-code">Copy program code</h4>
-<p>You can check the <a href="https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catsEffectTutorial/copyfile/CopyFile.scala">final version of our copy program
+<p>You can check the <a href="https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catseffecttutorial/copyfile/CopyFile.scala">final version of our copy program
 here</a>.</p>
 
 <p>The program can be run from <code class="highlighter-rouge">sbt</code> just by issuing this call:</p>
 
-<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;</span> <span class="n">runMain</span> <span class="n">catsEffectTutorial</span><span class="o">.</span><span class="nc">CopyFile</span> <span class="n">origin</span><span class="o">.</span><span class="n">txt</span> <span class="n">destination</span><span class="o">.</span><span class="n">txt</span>
+<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;</span> <span class="n">runMain</span> <span class="n">catseffecttutorial</span><span class="o">.</span><span class="nc">CopyFile</span> <span class="n">origin</span><span class="o">.</span><span class="n">txt</span> <span class="n">destination</span><span class="o">.</span><span class="n">txt</span>
 </code></pre></div></div>
 
 <p>It can be argued that using <code class="highlighter-rouge">IO{java.nio.file.Files.copy(...)}</code> would get an
@@ -529,7 +529,7 @@ actually easier to work on <code class="highlighter-rouge">F</code> than on any 
 
 <h4 id="copy-program-code-polymorphic-version">Copy program code, polymorphic version</h4>
 <p>The polymorphic version of our copy program in full is available
-<a href="https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catsEffectTutorial/copyfile/CopyFilePolymorphic.scala">here</a>.</p>
+<a href="https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catseffecttutorial/copyfile/CopyFilePolymorphic.scala">here</a>.</p>
 
 <h3 id="exercises-improving-our-small-io-program">Exercises: improving our small <code class="highlighter-rouge">IO</code> program</h3>
 
@@ -556,17 +556,17 @@ copying must be safely cancelable at any moment.</li>
 more producers insert data on a shared data structure like a queue or buffer
 while one or more consumers extract data from it. Readers and writers run
 concurrently. If the queue is empty then readers will block until data is
-avaiable, if the queue is full then writers will wait for some ‘slot’ to be
+available, if the queue is full then writers will wait for some ‘socket’ to be
 free. Only one writer at a time can add data to the queue to prevent data
 corruption. Also only one reader can extract data from the queue so no two
 readers get the same data item.</p>
 
 <p>Variations of this problem exists depending on whether there are more than one
 consumer/producer, or whether the data structure siting between them is
-size-bounded or not. Here we will first work on a solution for a single producer
-and consumer setting for bounded and unbounded buffers, then we will evolve the
-solution for multiple producers and consumers. In both cases we will use a
-bounded queue as the shared data structure.</p>
+size-bounded or not. Unless stated otherwise, the solutions discussed here are
+suited for multi consumer and multi reader settings. Initially the solutions
+will assume an unbounded data structure, to then present a solution for a
+bounded one.</p>
 
 <p>But before we work on the solution for this problem we must introduce <em>fibers</em>,
 which are the basic building block of cats-effect concurrency.</p>
@@ -588,10 +588,11 @@ pools.</p>
 fibers: <a href="https://typelevel.org/cats-effect/concurrency/deferred.html">Deferred</a>,
 <a href="https://typelevel.org/cats-effect/concurrency/mvar.html">MVar2</a>,
 <a href="https://typelevel.org/cats-effect/concurrency/ref.html">Ref</a> and
-<a href="https://typelevel.org/cats-effect/concurrency/semaphore.html">Semaphore</a>. It is
-important to understand that when a fiber gets blocked by some concurrent data
-structure cats-effect just recycles the thread so it becomes available for other
-fiber. Cats-effect also recovers threads of finished and cancelled fibers.  But
+<a href="https://typelevel.org/cats-effect/concurrency/semaphore.html">Semaphore</a>
+(semaphores we already discussed in the first part of this tutorial). It is
+important to understand that, when a fiber gets blocked by some concurrent data
+structure, cats-effect recycles the thread so it becomes available for other
+fibers. Cats-effect also recovers threads of finished and cancelled fibers.  But
 keep in mind that, in contrast, if the fiber is blocked by some external action
 like waiting for some input from a TCP socket, then cats-effect has no way to
 recover back that thread until the action finishes.</p>
@@ -601,90 +602,107 @@ other tutorial ‘Concurrency in Scala with
 Cats-Effect’</a>. It is also
 strongly advised to read the <a href="https://typelevel.org/cats-effect/concurrency/">Concurrency section of cats-effect
 docs</a>. But for the remaining of
-this tutorial we will focus on a practical approach to those concepts by
-implementing a solution to the producer-consumer problem. Ok, now we have
-briefly discussed fibers we can start working on our producer-consumer problem.</p>
+this tutorial we will focus on a practical approach to those concepts.</p>
 
-<h3 id="single-producer-consumer-with-unbounded-buffer-naive-implementation">Single producer-consumer with unbounded buffer, naive implementation</h3>
-<p>This is the simplest scenario. We have an intermediate structure where one
-producer inserts data to and one consumer extracts data from. First of all we
-define the functions that will create the data for the producer (<code class="highlighter-rouge">create</code>) and
-will process that data for the consumer (<code class="highlighter-rouge">process</code>). For the sake of simplicity
-<code class="highlighter-rouge">create</code> will just generate a sequence of integers (<code class="highlighter-rouge">1</code>, <code class="highlighter-rouge">2</code>, <code class="highlighter-rouge">3</code>, …) and
-<code class="highlighter-rouge">process</code> will only check that the received integer is the one expected. This
-check will be handy to detect whether our implementation has problems such as
-race conditions.</p>
+<p>Ok, now we have briefly discussed fibers we can start working on our
+producer-consumer problem.</p>
 
-<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="nn">cats.effect.IO</span>
-<span class="k">import</span> <span class="nn">java.util.concurrent.atomic.AtomicInteger</span>
+<h3 id="first-and-inefficient-implementation">First and inefficient implementation</h3>
+<p>We need an intermediate structure where producer(s) can insert data to and
+consumer(s) extracts data from. Let’s assume a simple queue. Initially there
+will be only one producer and one consumer. Producer will generate a sequence of
+integers (<code class="highlighter-rouge">1</code>, <code class="highlighter-rouge">2</code>, <code class="highlighter-rouge">3</code>…), consumer will just read that sequence.  Our shared
+queue will be an instance of an immutable <code class="highlighter-rouge">Queue[Int]</code>.</p>
 
-<span class="k">val</span> <span class="n">prev</span> <span class="k">=</span> <span class="k">new</span> <span class="nc">AtomicInteger</span><span class="o">(</span><span class="mi">0</span><span class="o">)</span> <span class="c1">// No need to make it atomic for a single consumer, but convinient
-</span><span class="k">def</span> <span class="n">process</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">i</span><span class="k">:</span> <span class="kt">Int</span><span class="o">)</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
-  <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span> <span class="o">{</span>
-    <span class="k">if</span> <span class="o">(!</span><span class="n">prev</span><span class="o">.</span><span class="n">compareAndSet</span><span class="o">(</span><span class="n">i</span> <span class="o">-</span> <span class="mi">1</span><span class="o">,</span> <span class="n">i</span><span class="o">))</span>
-      <span class="k">throw</span> <span class="k">new</span> <span class="nc">Exception</span><span class="o">(</span><span class="n">s</span><span class="s">"Race condition, it should be ${prev.incrementAndGet()} but is $i"</span><span class="o">)</span>
-    <span class="k">if</span> <span class="o">(</span><span class="n">i</span> <span class="o">%</span> <span class="mi">10000</span> <span class="o">==</span> <span class="mi">0</span><span class="o">)</span>
-      <span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Processed $i elements"</span><span class="o">)</span>
-  <span class="o">}</span>
+<p>As accesses to the queue can (and will!) be concurrent, we need some way to
+protect the queue so only one fiber at a time is handling it. The best way to
+ensure an ordered access to some shared data is 
+<a href="https://typelevel.org/cats-effect/concurrency/ref.html">Ref</a>. A <code class="highlighter-rouge">Ref</code> instance
+wraps some given data and implements methods to manipulate that data in a safe
+manner. When some fiber is runnning one of those methods, any other call to any
+method of the <code class="highlighter-rouge">Ref</code> instance will be blocked.</p>
 
-<span class="k">val</span> <span class="n">counter</span> <span class="k">=</span> <span class="k">new</span> <span class="nc">AtomicInteger</span><span class="o">(</span><span class="mi">0</span><span class="o">)</span> <span class="c1">// No need to make it atomit for a single producer, but convinient
-</span><span class="k">def</span> <span class="n">create</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">]</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Int</span><span class="o">]</span> <span class="k">=</span>
-  <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">counter</span><span class="o">.</span><span class="n">incrementAndGet</span><span class="o">())</span>
-</code></pre></div></div>
+<p>The <code class="highlighter-rouge">Ref</code> wrapping our queue will be <code class="highlighter-rouge">Ref[F, Queue[Int]]</code> (for some <code class="highlighter-rouge">F[_]</code>).</p>
 
-<p>Now we can implement our producer and consumer. Let’s start with a ‘naive’
-implementation:</p>
+<p>Now, our <code class="highlighter-rouge">producer</code> method will be:</p>
 
-<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="nn">cats.effect.IO</span>
+<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="nn">cats.effect._</span>
+<span class="k">import</span> <span class="nn">cats.effect.concurrent.Ref</span>
 <span class="k">import</span> <span class="nn">cats.implicits._</span>
-<span class="k">import</span> <span class="nn">scala.collection.mutable</span>
+<span class="k">import</span> <span class="nn">collection.immutable.Queue</span>
 
-<span class="k">def</span> <span class="n">process</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">i</span><span class="k">:</span> <span class="kt">Int</span><span class="o">)</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
-</span><span class="k">def</span> <span class="n">create</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">]</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Int</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
-</span>
-<span class="k">def</span> <span class="n">producer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">buffer</span><span class="k">:</span> <span class="kt">mutable.Buffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
-  <span class="k">for</span> <span class="o">{</span>
-    <span class="n">i</span> <span class="k">&lt;-</span> <span class="n">create</span>
-    <span class="k">_</span> <span class="k">&lt;-</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">buffer</span><span class="o">.</span><span class="n">append</span><span class="o">(</span><span class="n">i</span><span class="o">))</span>
-    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">producer</span><span class="o">(</span><span class="n">buffer</span><span class="o">)</span>
-  <span class="o">}</span> <span class="k">yield</span> <span class="o">()</span>
-
-<span class="k">def</span> <span class="n">consumer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">buffer</span><span class="k">:</span> <span class="kt">mutable.Buffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
-  <span class="k">for</span> <span class="o">{</span>
-    <span class="n">iO</span> <span class="k">&lt;-</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span> <span class="o">{</span>
-      <span class="k">if</span> <span class="o">(</span><span class="n">buffer</span><span class="o">.</span><span class="n">nonEmpty</span><span class="o">)</span> <span class="nc">Option</span><span class="o">(</span><span class="n">buffer</span><span class="o">.</span><span class="n">remove</span><span class="o">(</span><span class="mi">0</span><span class="o">))</span>
-      <span class="k">else</span> <span class="nc">None</span>
-    <span class="o">}</span>
-    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">iO</span><span class="o">.</span><span class="n">fold</span><span class="o">(</span><span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">unit</span><span class="o">)(</span><span class="n">i</span> <span class="k">=&gt;</span> <span class="n">process</span><span class="o">(</span><span class="n">i</span><span class="o">))</span>
-    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">consumer</span><span class="o">(</span><span class="n">buffer</span><span class="o">)</span>
-  <span class="o">}</span> <span class="k">yield</span> <span class="o">()</span>
+<span class="k">def</span> <span class="n">producer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span><span class="kt">:</span> <span class="kt">Sync:</span> <span class="kt">ContextShift</span><span class="o">](</span><span class="n">queueR</span><span class="k">:</span> <span class="kt">Ref</span><span class="o">[</span><span class="kt">F</span>, <span class="kt">Queue</span><span class="o">[</span><span class="kt">Int</span><span class="o">]],</span> <span class="n">counter</span><span class="k">:</span> <span class="kt">Int</span><span class="o">)</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
+  <span class="o">(</span><span class="k">for</span> <span class="o">{</span>
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="k">if</span><span class="o">(</span><span class="n">counter</span> <span class="o">%</span> <span class="mi">10000</span> <span class="o">==</span> <span class="mi">0</span><span class="o">)</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Produced $counter items"</span><span class="o">))</span> <span class="k">else</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">unit</span>
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">queueR</span><span class="o">.</span><span class="n">getAndUpdate</span><span class="o">(</span><span class="k">_</span><span class="o">.</span><span class="n">enqueue</span><span class="o">(</span><span class="n">counter</span> <span class="o">+</span> <span class="mi">1</span><span class="o">))</span> <span class="c1">// Putting data in shared queue
+</span>    <span class="k">_</span> <span class="k">&lt;-</span> <span class="nc">ContextShift</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">shift</span>
+  <span class="o">}</span> <span class="k">yield</span> <span class="o">())</span> <span class="o">&gt;&gt;</span> <span class="n">producer</span><span class="o">(</span><span class="n">queueR</span><span class="o">,</span> <span class="n">counter</span> <span class="o">+</span> <span class="mi">1</span><span class="o">)</span>
 </code></pre></div></div>
 
-<p>The <code class="highlighter-rouge">producer</code> function invokes <code class="highlighter-rouge">create</code> to get a new data item, then adds it to
-the buffer. The <code class="highlighter-rouge">consumer</code> function on the other hand checkes whether if there
-is any data in the buffer and if so it calls it feeds it to <code class="highlighter-rouge">process</code>. When done
-each function calls itself recursively to start the process anew. As cats-effect
-<code class="highlighter-rouge">IO</code> is stack-safe we are not concerned with stack overflown exceptions.</p>
+<p>First line just prints some log message every <code class="highlighter-rouge">10000</code> items, so we know if it is
+‘alive’. Then it calls <code class="highlighter-rouge">queueR</code>.getAndUpdate<code class="highlighter-rouge"> to add data into the queue. Note
+that </code>.getAndUpdate<code class="highlighter-rouge"> provides the current queue, then we use </code>.enqueue<code class="highlighter-rouge"> to
+insert the next value </code>counter+1<code class="highlighter-rouge">. This call returns a new queue with the value
+added that is stored by the ref instance. If some other fiber is accessing to
+</code>queueR` then the fiber is blocked.</p>
 
-<p>We can now create a program that instantiates the buffer and runs both
+<p>Finally we run <code class="highlighter-rouge">ContextShift[F].shift</code> before calling again to the producer
+recursively with the next counter value. In fact, the call to <code class="highlighter-rouge">.shift</code> is not
+strictly needed but it is a good policy to include it in recursive functions.
+Why is that? Well, internally cats-effect tries to assign fibers so all tasks
+are given the chance to be executed. But in a recursive function that
+potentially never ends it can be that the fiber is always running and
+cats-effect has no change to recover the thread being used by it. By calling to
+<code class="highlighter-rouge">.shift</code> the programmer explicitly asks cats-effect to re-schedule fibers to
+available threads using the current fiber, so it can be reused by other tasks.
+Strictly speaking, maybe our <code class="highlighter-rouge">producer</code> does not need such call as the access to
+<code class="highlighter-rouge">queueR.getAndUpdate</code> will get the fiber blocked if some other fiber is using
+<code class="highlighter-rouge">queueR</code> at that moment, and cats-effect can recycle blocked fibers for other
+tasks. Still, we keep it there as good practice.</p>
+
+<p>The <code class="highlighter-rouge">consumer</code> method is a bit different. It will try to read data from the
+queue but it must be aware that the queue must be empty:</p>
+
+<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="nn">cats.effect._</span>
+<span class="k">import</span> <span class="nn">cats.effect.concurrent.Ref</span>
+<span class="k">import</span> <span class="nn">cats.implicits._</span>
+<span class="k">import</span> <span class="nn">collection.immutable.Queue</span>
+
+<span class="k">def</span> <span class="n">consumer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync:</span> <span class="kt">ContextShift</span><span class="o">](</span><span class="n">queueR</span><span class="k">:</span> <span class="kt">Ref</span><span class="o">[</span><span class="kt">F</span>, <span class="kt">Queue</span><span class="o">[</span><span class="kt">Int</span><span class="o">]])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
+  <span class="o">(</span><span class="k">for</span> <span class="o">{</span>
+    <span class="n">iO</span> <span class="k">&lt;-</span> <span class="n">queueR</span><span class="o">.</span><span class="n">modify</span><span class="o">{</span> <span class="n">queue</span> <span class="k">=&gt;</span>
+      <span class="n">queue</span><span class="o">.</span><span class="n">dequeueOption</span><span class="o">.</span><span class="n">fold</span><span class="o">((</span><span class="n">queue</span><span class="o">,</span> <span class="nc">Option</span><span class="o">.</span><span class="n">empty</span><span class="o">[</span><span class="kt">Int</span><span class="o">])){</span><span class="k">case</span> <span class="o">(</span><span class="n">i</span><span class="o">,</span><span class="n">queue</span><span class="o">)</span> <span class="k">=&gt;</span> <span class="o">(</span><span class="n">queue</span><span class="o">,</span> <span class="nc">Option</span><span class="o">(</span><span class="n">i</span><span class="o">))}</span>
+    <span class="o">}</span>
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="k">if</span><span class="o">(</span><span class="n">iO</span><span class="o">.</span><span class="n">exists</span><span class="o">(</span><span class="k">_</span> <span class="o">%</span> <span class="mi">10000</span> <span class="o">==</span> <span class="mi">0</span><span class="o">))</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Consumed ${iO.get} items"</span><span class="o">))</span>
+      <span class="k">else</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">unit</span>
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="nc">ContextShift</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">shift</span>
+  <span class="o">}</span> <span class="k">yield</span> <span class="n">iO</span><span class="o">)</span> <span class="o">&gt;&gt;</span> <span class="n">consumer</span><span class="o">(</span><span class="n">queueR</span><span class="o">)</span>
+</code></pre></div></div>
+
+<p>The call to <code class="highlighter-rouge">queueR.modify</code> allows to modify the wrapped data (our queue) and
+return a value that is computed from that data. In our case, it returns a
+<code class="highlighter-rouge">Option[Int]</code> that will be <code class="highlighter-rouge">None</code> if queue was empty. Next line is used to log
+a message in console every <code class="highlighter-rouge">10000</code> read items. Finally <code class="highlighter-rouge">consumer</code> is called
+recursively to start again.</p>
+
+<p>We can now create a program that instantiates our <code class="highlighter-rouge">queueR</code> and runs both
 <code class="highlighter-rouge">producer</code> and <code class="highlighter-rouge">consumer</code> in parallel:</p>
 
-<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="nn">cats.effect.</span><span class="o">{</span><span class="nc">ExitCode</span><span class="o">,</span> <span class="nc">IO</span><span class="o">,</span> <span class="nc">IOApp</span><span class="o">}</span>
+<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="nn">cats.effect._</span>
+<span class="k">import</span> <span class="nn">cats.effect.concurrent.Ref</span>
 <span class="k">import</span> <span class="nn">cats.implicits._</span>
-<span class="k">import</span> <span class="nn">scala.collection.mutable</span>
 
-<span class="k">object</span> <span class="nc">NaiveProducerConsumer</span> <span class="k">extends</span> <span class="nc">IOApp</span> <span class="o">{</span>
+<span class="k">import</span> <span class="nn">collection.immutable.Queue</span>
 
-  <span class="k">def</span> <span class="n">process</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">i</span><span class="k">:</span> <span class="kt">Int</span><span class="o">)</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
-</span>  <span class="k">def</span> <span class="n">create</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">]</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Int</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
-</span>  
-  <span class="k">def</span> <span class="n">consumer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">buffer</span><span class="k">:</span> <span class="kt">mutable.Buffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
-</span>  <span class="k">def</span> <span class="n">producer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">buffer</span><span class="k">:</span> <span class="kt">mutable.Buffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
-</span>  
+<span class="k">object</span> <span class="nc">InefficientProducerConsumer</span> <span class="k">extends</span> <span class="nc">IOApp</span> <span class="o">{</span>
+
+  <span class="k">def</span> <span class="n">producer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span><span class="kt">:</span> <span class="kt">Sync:</span> <span class="kt">ContextShift</span><span class="o">](</span><span class="n">queueR</span><span class="k">:</span> <span class="kt">Ref</span><span class="o">[</span><span class="kt">F</span>, <span class="kt">Queue</span><span class="o">[</span><span class="kt">Int</span><span class="o">]],</span> <span class="n">counter</span><span class="k">:</span> <span class="kt">Int</span><span class="o">)</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
+</span>  <span class="k">def</span> <span class="n">consumer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync:</span> <span class="kt">ContextShift</span><span class="o">](</span><span class="n">queueR</span><span class="k">:</span> <span class="kt">Ref</span><span class="o">[</span><span class="kt">F</span>, <span class="kt">Queue</span><span class="o">[</span><span class="kt">Int</span><span class="o">]])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
+</span>
   <span class="k">override</span> <span class="k">def</span> <span class="n">run</span><span class="o">(</span><span class="n">args</span><span class="k">:</span> <span class="kt">List</span><span class="o">[</span><span class="kt">String</span><span class="o">])</span><span class="k">:</span> <span class="kt">IO</span><span class="o">[</span><span class="kt">ExitCode</span><span class="o">]</span> <span class="k">=</span>
     <span class="k">for</span> <span class="o">{</span>
-      <span class="n">buffer</span> <span class="k">&lt;-</span> <span class="nc">IO</span><span class="o">(</span><span class="k">new</span> <span class="n">mutable</span><span class="o">.</span><span class="nc">ListBuffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">]())</span>
-      <span class="n">res</span>    <span class="k">&lt;-</span> <span class="o">(</span><span class="n">producer</span><span class="o">[</span><span class="kt">IO</span><span class="o">](</span><span class="n">buffer</span><span class="o">),</span> <span class="n">consumer</span><span class="o">[</span><span class="kt">IO</span><span class="o">](</span><span class="n">buffer</span><span class="o">))</span>
+      <span class="n">queueR</span> <span class="k">&lt;-</span> <span class="nc">Ref</span><span class="o">.</span><span class="n">of</span><span class="o">[</span><span class="kt">IO</span>, <span class="kt">Queue</span><span class="o">[</span><span class="kt">Int</span><span class="o">]](</span><span class="nc">Queue</span><span class="o">.</span><span class="n">empty</span><span class="o">[</span><span class="kt">Int</span><span class="o">])</span>
+      <span class="n">res</span> <span class="k">&lt;-</span> <span class="o">(</span><span class="n">consumer</span><span class="o">(</span><span class="n">queueR</span><span class="o">),</span> <span class="n">producer</span><span class="o">(</span><span class="n">queueR</span><span class="o">,</span> <span class="mi">0</span><span class="o">))</span>
         <span class="o">.</span><span class="n">parMapN</span><span class="o">((</span><span class="k">_</span><span class="o">,</span> <span class="k">_</span><span class="o">)</span> <span class="k">=&gt;</span> <span class="nc">ExitCode</span><span class="o">.</span><span class="nc">Success</span><span class="o">)</span> <span class="c1">// Run producer and consumer in parallel until done (likely by user cancelling with CTRL-C)
 </span>        <span class="o">.</span><span class="n">handleErrorWith</span> <span class="o">{</span> <span class="n">t</span> <span class="k">=&gt;</span>
           <span class="nc">IO</span><span class="o">(</span><span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Error caught: ${t.getMessage}"</span><span class="o">)).</span><span class="n">as</span><span class="o">(</span><span class="nc">ExitCode</span><span class="o">.</span><span class="nc">Error</span><span class="o">)</span>
@@ -695,293 +713,120 @@ each function calls itself recursively to start the process anew. As cats-effect
 </code></pre></div></div>
 
 <p>The full implementation of this naive producer consumer is available
-<a href="https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catsEffectTutorial/producerconsumer/NaiveProducerConsumer.scala">here</a>.</p>
+<a href="https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catseffecttutorial/producerconsumer/InefficientProducerConsumer.scala">here</a>.</p>
 
-<p>Our <code class="highlighter-rouge">run</code> function instantiates the shared <code class="highlighter-rouge">buffer</code> and boots the producer and
-consumer in parallel. To do to it uses <code class="highlighter-rouge">parMapN</code>, that creates and runs the
-fibers that will run the <code class="highlighter-rouge">IO</code>s passed as paremeter. Program will run until an
-error is thrown by either the consumer or producer, or execution is cancelled
-<em>e.g.</em> by the user pressing CTRL-C.</p>
+<p>Our <code class="highlighter-rouge">run</code> function instantiates the shared queue wrapped in a <code class="highlighter-rouge">Ref</code> and boots
+the producer and consumer in parallel. To do to it uses <code class="highlighter-rouge">parMapN</code>, that creates
+and runs the fibers that will run the <code class="highlighter-rouge">IO</code>s passed as paremeter. Then it takes
+the output of each fiber and and applies a given function to them. In our case
+both producer and consumer shall run forever until user presses CTRL-C which
+will trigger a cancellation. In that case</p>
+
+<p>Program will
+run until an error is thrown by either the consumer or producer, or execution is
+cancelled <em>e.g.</em> by the user pressing CTRL-C.</p>
 
 <p>Alternatively we could have used <code class="highlighter-rouge">start</code> to explicitely create new <code class="highlighter-rouge">Fiber</code>
 instances that will run the producer and consumer, then use <code class="highlighter-rouge">join</code> to wait for
 them to finish, something like:</p>
 
-<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="nn">cats.effect.</span><span class="o">{</span><span class="nc">ExitCode</span><span class="o">,</span> <span class="nc">IO</span><span class="o">}</span>
-<span class="k">import</span> <span class="nn">cats.implicits._</span>
-<span class="k">import</span> <span class="nn">scala.collection.mutable</span>
-
-<span class="k">object</span> <span class="nc">NaiveProducerConsumer</span> <span class="k">extends</span> <span class="nc">IOApp</span> <span class="o">{</span>
-
-  <span class="k">def</span> <span class="n">process</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">i</span><span class="k">:</span> <span class="kt">Int</span><span class="o">)</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
-</span>  <span class="k">def</span> <span class="n">create</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">]</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Int</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
-</span>  
-  <span class="k">def</span> <span class="n">consumer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">buffer</span><span class="k">:</span> <span class="kt">mutable.Buffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
-</span>  <span class="k">def</span> <span class="n">producer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">buffer</span><span class="k">:</span> <span class="kt">mutable.Buffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
-</span>
-  <span class="k">override</span> <span class="k">def</span> <span class="n">run</span><span class="o">(</span><span class="n">args</span><span class="k">:</span> <span class="kt">List</span><span class="o">[</span><span class="kt">String</span><span class="o">])</span><span class="k">:</span> <span class="kt">IO</span><span class="o">[</span><span class="kt">ExitCode</span><span class="o">]</span> <span class="k">=</span>
-    <span class="k">for</span> <span class="o">{</span>
-      <span class="n">buffer</span> <span class="k">&lt;-</span> <span class="nc">IO</span><span class="o">(</span><span class="k">new</span> <span class="n">mutable</span><span class="o">.</span><span class="nc">ListBuffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">]())</span>
-      <span class="n">producerFiber</span> <span class="k">&lt;-</span> <span class="n">producer</span><span class="o">[</span><span class="kt">IO</span><span class="o">](</span><span class="n">buffer</span><span class="o">).</span><span class="n">start</span>
-      <span class="n">consumerFiber</span> <span class="k">&lt;-</span> <span class="n">consumer</span><span class="o">[</span><span class="kt">IO</span><span class="o">](</span><span class="n">buffer</span><span class="o">).</span><span class="n">start</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">producerFiber</span><span class="o">.</span><span class="n">join</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">consumerFiber</span><span class="o">.</span><span class="n">join</span>
-    <span class="o">}</span> <span class="k">yield</span> <span class="nc">ExitCode</span><span class="o">.</span><span class="nc">Error</span>
-<span class="o">}</span>
+<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="n">run</span><span class="o">(</span><span class="n">args</span><span class="k">:</span> <span class="kt">List</span><span class="o">[</span><span class="kt">String</span><span class="o">])</span><span class="k">:</span> <span class="kt">IO</span><span class="o">[</span><span class="kt">ExitCode</span><span class="o">]</span> <span class="k">=</span>
+  <span class="k">for</span> <span class="o">{</span>
+    <span class="n">queueR</span> <span class="k">&lt;-</span> <span class="nc">Ref</span><span class="o">.</span><span class="n">of</span><span class="o">[</span><span class="kt">IO</span>, <span class="kt">Queue</span><span class="o">[</span><span class="kt">Int</span><span class="o">]](</span><span class="nc">Queue</span><span class="o">.</span><span class="n">empty</span><span class="o">[</span><span class="kt">Int</span><span class="o">])</span>
+    <span class="n">producerFiber</span> <span class="k">&lt;-</span> <span class="n">producer</span><span class="o">(</span><span class="n">queueR</span><span class="o">,</span> <span class="mi">0</span><span class="o">).</span><span class="n">start</span>
+    <span class="n">consumerFiber</span> <span class="k">&lt;-</span> <span class="n">consumer</span><span class="o">(</span><span class="n">queueR</span><span class="o">,</span> <span class="mi">0</span><span class="o">).</span><span class="n">start</span>
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">producerFiber</span><span class="o">.</span><span class="n">join</span>
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">consumerFiber</span><span class="o">.</span><span class="n">join</span>
+  <span class="o">}</span> <span class="k">yield</span> <span class="nc">ExitCode</span><span class="o">.</span><span class="nc">Error</span>
 </code></pre></div></div>
 
 <p>Problem is, if there is an error in any of the fibers the <code class="highlighter-rouge">join</code> call will not
 hint it, nor it will return. In contrast <code class="highlighter-rouge">parMapN</code> does promote the error it
-finds to the caller.</p>
+finds to the caller. In general, if possible, programmers should prefer to use
+higher level commands such as <code class="highlighter-rouge">parMapN</code> or <code class="highlighter-rouge">parSequence</code> to deal with fibers.</p>
 
 <p>Ok, we stick to our implementation based on <code class="highlighter-rouge">.parMapN</code>. Are we done? Does it
-Work? Well, unfortunately, <em>if we run the program we will find errors</em>. These
-are due to race conditions as our naive implementation does not make a good job
-ensuring that the shared buffer is accessed in an orderly manner. In the next
-section we will ensure proper access control using cats-effect’s semaphores.</p>
+Work? Well, it works… but it is far from ideal. If we run it we will find that
+the producer runs faster than the consumer so the queue is constantly growing.
+And, even if that was not the case, we must realize that the consumer will be
+constantly running regardless if there are elements in the queue, which is far
+from ideal. We will try to improve it in the next section using semaphores. Also
+we will use several consumers and producers to balance production and
+consumption rate.</p>
 
-<h3 id="single-producer-consumer-with-unbounded-buffer-using-semaphores">Single producer-consumer with unbounded buffer using semaphores</h3>
-<p>Semaphores are used to control access to critical sections of our code that handle
-shared resources, when those sections can be run concurrently. Each semaphore
-contains a number that represents <em>permits</em>. To access a critical section
-permits have to be obtained, later to be freed when the critical section is
-left.</p>
+<h3 id="bringing-in-semaphores">Bringing in semaphores</h3>
+<p>As discussed in the first section of this tutorial, semaphores are used to
+control access to critical sections of our code that handle shared resources,
+when those sections can be run concurrently. Each semaphore contains a number
+that represents <em>permits</em>. To access a critical section permits have to be
+obtained, later to be released when the critical section is left.</p>
 
-<p>In our example the shared resource is the buffer, and the critical sections are
-the parts that access to it <code class="highlighter-rouge">producer</code> and <code class="highlighter-rouge">consumer</code>. We protect those sections
-using a semaphore <code class="highlighter-rouge">lock</code> with one permit. The semaphore will be created in the
-main <code class="highlighter-rouge">run</code> function and then passed down the line:</p>
+<p>In our producer/consumer code we already protect access to the queue (our shared
+resource) using a <code class="highlighter-rouge">Ref</code>. But we can use semaphores on top of that to signal
+whether there are elements in the queue or not. This can be done by keeping in
+the semaphore a counter of <code class="highlighter-rouge">filled</code> sockets, which will be increased when adding
+elements to the queue, and decreased when elements are removed. Consumer code
+will be changed so it blocks when there are no elements to be retrieved
+(<code class="highlighter-rouge">filled</code> has zero permits).</p>
 
-<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="nn">cats.effect.</span><span class="o">{</span><span class="nc">ExitCode</span><span class="o">,</span> <span class="nc">IO</span><span class="o">,</span> <span class="nc">IOApp</span><span class="o">}</span>
-<span class="k">import</span> <span class="nn">cats.effect.concurrent.Semaphore</span>
+<p>So now our producer and consumer look like this:</p>
+
+<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="nn">cats.effect.concurrent.</span><span class="o">{</span><span class="nc">Ref</span><span class="o">,</span> <span class="nc">Semaphore</span><span class="o">}</span>
+<span class="k">import</span> <span class="nn">cats.effect._</span>
 <span class="k">import</span> <span class="nn">cats.implicits._</span>
 
-<span class="k">import</span> <span class="nn">scala.collection.mutable</span>
+<span class="k">import</span> <span class="nn">scala.collection.immutable.Queue</span>
 
-<span class="k">object</span> <span class="nc">SemaphoreProducerConsumerUnboundedQueue</span> <span class="k">extends</span> <span class="nc">IOApp</span> <span class="o">{</span>
+<span class="k">def</span> <span class="n">producer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span><span class="kt">:</span> <span class="kt">Sync:</span> <span class="kt">ContextShift</span><span class="o">](</span><span class="n">id</span><span class="k">:</span> <span class="kt">Int</span><span class="o">,</span> <span class="n">queueR</span><span class="k">:</span> <span class="kt">Ref</span><span class="o">[</span><span class="kt">F</span>, <span class="kt">Queue</span><span class="o">[</span><span class="kt">Int</span><span class="o">]],</span> <span class="n">counterR</span><span class="k">:</span> <span class="kt">Ref</span><span class="o">[</span><span class="kt">F</span>, <span class="kt">Int</span><span class="o">],</span> <span class="n">filled</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
+  <span class="o">(</span><span class="k">for</span> <span class="o">{</span>
+    <span class="n">i</span> <span class="k">&lt;-</span> <span class="n">counterR</span><span class="o">.</span><span class="n">getAndUpdate</span><span class="o">(</span><span class="k">_</span> <span class="o">+</span> <span class="mi">1</span><span class="o">)</span>
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">queueR</span><span class="o">.</span><span class="n">getAndUpdate</span><span class="o">(</span><span class="k">_</span><span class="o">.</span><span class="n">enqueue</span><span class="o">(</span><span class="n">i</span><span class="o">))</span>
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">filled</span><span class="o">.</span><span class="n">release</span> <span class="c1">// Signal new item in queue
+</span>    <span class="k">_</span> <span class="k">&lt;-</span> <span class="k">if</span><span class="o">(</span><span class="n">i</span> <span class="o">%</span> <span class="mi">10000</span> <span class="o">==</span> <span class="mi">0</span><span class="o">)</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Producer $id has reached $i items"</span><span class="o">))</span> <span class="k">else</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">unit</span>
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="nc">ContextShift</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">shift</span>
+  <span class="o">}</span> <span class="k">yield</span> <span class="o">())</span> <span class="o">&gt;&gt;</span> <span class="n">producer</span><span class="o">(</span><span class="n">id</span><span class="o">,</span> <span class="n">queueR</span><span class="o">,</span> <span class="n">counterR</span><span class="o">,</span> <span class="n">filled</span><span class="o">)</span>
 
-  <span class="k">def</span> <span class="n">process</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">i</span><span class="k">:</span> <span class="kt">Int</span><span class="o">)</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
-</span>  <span class="k">def</span> <span class="n">create</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">]</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Int</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
+<span class="k">def</span> <span class="n">consumer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span><span class="kt">:</span> <span class="kt">Sync:</span> <span class="kt">ContextShift</span><span class="o">](</span><span class="n">id</span><span class="k">:</span> <span class="kt">Int</span><span class="o">,</span> <span class="n">queueR</span><span class="k">:</span> <span class="kt">Ref</span><span class="o">[</span><span class="kt">F</span>, <span class="kt">Queue</span><span class="o">[</span><span class="kt">Int</span><span class="o">]],</span> <span class="n">filled</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
+  <span class="o">(</span><span class="k">for</span> <span class="o">{</span>
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">filled</span><span class="o">.</span><span class="n">acquire</span> <span class="c1">// Wait for some item in queue
+</span>    <span class="n">i</span> <span class="k">&lt;-</span> <span class="n">queueR</span><span class="o">.</span><span class="n">modify</span><span class="o">(</span><span class="k">_</span><span class="o">.</span><span class="n">dequeue</span><span class="o">.</span><span class="n">swap</span><span class="o">)</span>
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="k">if</span><span class="o">(</span><span class="n">i</span> <span class="o">%</span> <span class="mi">10000</span> <span class="o">==</span> <span class="mi">0</span><span class="o">)</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Consumer $id has reached $i items"</span><span class="o">))</span> <span class="k">else</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">unit</span>
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="nc">ContextShift</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">shift</span>
+  <span class="o">}</span> <span class="k">yield</span> <span class="o">())</span> <span class="o">&gt;&gt;</span> <span class="n">consumer</span><span class="o">(</span><span class="n">id</span><span class="o">,</span> <span class="n">queueR</span><span class="o">,</span> <span class="n">filled</span><span class="o">)</span>
+</code></pre></div></div>
+
+<p>Note how the producer uses <code class="highlighter-rouge">filled.release</code> to signal that a new item is
+available in the queue by increasing the number of permits in the semaphore.
+Likewise, consumer uses <code class="highlighter-rouge">filled.acquire</code> which block if <code class="highlighter-rouge">filled</code> is zero (no
+elements in queue). If it is not zero (or as soon as it becomes &gt; 0) the call is
+unblocked and the number of permits in the semaphore is decreased.</p>
+
+<p>Finally we modify our main program so it instantiates the counter and queue
+references, alongside with the semaphore. Also it will create several consumers
+and producers, 10 of each, and will start all of them in parallel:</p>
+
+<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="nn">cats.effect.concurrent.</span><span class="o">{</span><span class="nc">Ref</span><span class="o">,</span> <span class="nc">Semaphore</span><span class="o">}</span>
+<span class="k">import</span> <span class="nn">cats.effect._</span>
+<span class="k">import</span> <span class="nn">cats.implicits._</span>
+
+<span class="k">import</span> <span class="nn">scala.collection.immutable.Queue</span>
+
+<span class="k">object</span> <span class="nc">ProducerConsumer</span> <span class="k">extends</span> <span class="nc">IOApp</span> <span class="o">{</span>
+
+  <span class="k">def</span> <span class="n">producer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span><span class="kt">:</span> <span class="kt">Sync:</span> <span class="kt">ContextShift</span><span class="o">](</span><span class="n">id</span><span class="k">:</span> <span class="kt">Int</span><span class="o">,</span> <span class="n">queueR</span><span class="k">:</span> <span class="kt">Ref</span><span class="o">[</span><span class="kt">F</span>, <span class="kt">Queue</span><span class="o">[</span><span class="kt">Int</span><span class="o">]],</span> <span class="n">counterR</span><span class="k">:</span> <span class="kt">Ref</span><span class="o">[</span><span class="kt">F</span>, <span class="kt">Int</span><span class="o">],</span> <span class="n">filled</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
 </span>
-  <span class="k">def</span> <span class="n">producer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">buffer</span><span class="k">:</span> <span class="kt">mutable.Buffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">],</span> <span class="n">lock</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
-    <span class="k">for</span> <span class="o">{</span>
-      <span class="n">i</span> <span class="k">&lt;-</span> <span class="n">create</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">lock</span><span class="o">.</span><span class="n">acquire</span> <span class="c1">// Enter critical section, wait if lock already acquired
-</span>      <span class="k">_</span> <span class="k">&lt;-</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">buffer</span><span class="o">.</span><span class="n">append</span><span class="o">(</span><span class="n">i</span><span class="o">))</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">lock</span><span class="o">.</span><span class="n">release</span> <span class="c1">// Leave critical section
-</span>      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">producer</span><span class="o">(</span><span class="n">buffer</span><span class="o">,</span> <span class="n">lock</span><span class="o">)</span>
-    <span class="o">}</span> <span class="k">yield</span> <span class="o">()</span>
-
-  <span class="k">def</span> <span class="n">consumer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">buffer</span><span class="k">:</span> <span class="kt">mutable.Buffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">],</span> <span class="n">lock</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
-    <span class="k">for</span> <span class="o">{</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">lock</span><span class="o">.</span><span class="n">acquire</span> <span class="c1">// Enter critical section, wait if lock already acquired
-</span>      <span class="n">iO</span> <span class="k">&lt;-</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span> <span class="o">{</span>
-        <span class="k">if</span> <span class="o">(</span><span class="n">buffer</span><span class="o">.</span><span class="n">nonEmpty</span><span class="o">)</span> <span class="nc">Option</span><span class="o">(</span><span class="n">buffer</span><span class="o">.</span><span class="n">remove</span><span class="o">(</span><span class="mi">0</span><span class="o">))</span>
-        <span class="k">else</span> <span class="nc">None</span>
-      <span class="o">}</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">lock</span><span class="o">.</span><span class="n">release</span> <span class="c1">// Leave critical section
-</span>      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">iO</span><span class="o">.</span><span class="n">fold</span><span class="o">(</span><span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">unit</span><span class="o">)(</span><span class="n">i</span> <span class="k">=&gt;</span> <span class="n">process</span><span class="o">(</span><span class="n">i</span><span class="o">))</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">consumer</span><span class="o">(</span><span class="n">buffer</span><span class="o">,</span> <span class="n">lock</span><span class="o">)</span>
-    <span class="o">}</span> <span class="k">yield</span> <span class="o">()</span>
-
-  <span class="k">override</span> <span class="k">def</span> <span class="n">run</span><span class="o">(</span><span class="n">args</span><span class="k">:</span> <span class="kt">List</span><span class="o">[</span><span class="kt">String</span><span class="o">])</span><span class="k">:</span> <span class="kt">IO</span><span class="o">[</span><span class="kt">ExitCode</span><span class="o">]</span> <span class="k">=</span>
-    <span class="k">for</span> <span class="o">{</span>
-      <span class="n">buffer</span> <span class="k">&lt;-</span> <span class="nc">IO</span><span class="o">(</span><span class="k">new</span> <span class="n">mutable</span><span class="o">.</span><span class="nc">ListBuffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">]())</span>
-      <span class="n">lock</span> <span class="k">&lt;-</span> <span class="nc">Semaphore</span><span class="o">[</span><span class="kt">IO</span><span class="o">](</span><span class="mi">1</span><span class="o">)</span>
-      <span class="n">res</span> <span class="k">&lt;-</span> <span class="o">(</span><span class="n">producer</span><span class="o">(</span><span class="n">buffer</span><span class="o">,</span> <span class="n">lock</span><span class="o">),</span> <span class="n">consumer</span><span class="o">(</span><span class="n">buffer</span><span class="o">,</span> <span class="n">lock</span><span class="o">))</span>
-        <span class="o">.</span><span class="n">parMapN</span><span class="o">((</span><span class="k">_</span><span class="o">,</span> <span class="k">_</span><span class="o">)</span> <span class="k">=&gt;</span> <span class="nc">ExitCode</span><span class="o">.</span><span class="nc">Success</span><span class="o">)</span> <span class="c1">// Run producer and consumer in parallel until done (likely by user cancelling with CTRL-C)
-</span>        <span class="o">.</span><span class="n">handleErrorWith</span> <span class="o">{</span> <span class="n">t</span> <span class="k">=&gt;</span>
-          <span class="nc">IO</span><span class="o">(</span><span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Error caught: ${t.getMessage}"</span><span class="o">)).</span><span class="n">as</span><span class="o">(</span><span class="nc">ExitCode</span><span class="o">.</span><span class="nc">Error</span><span class="o">)</span>
-        <span class="o">}</span>
-    <span class="o">}</span> <span class="k">yield</span> <span class="n">res</span>
-<span class="o">}</span>
-</code></pre></div></div>
-
-<p>The full implementation of this producer consumer is available
-<a href="https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catsEffectTutorial/producerconsumer/SemaphoreProducerConsumerUnboundedQueue.scala">here</a>.</p>
-
-<p>So, this code is race conditions safe. There is no way that both producer and
-consumer access at the same time their critical sections. If the <code class="highlighter-rouge">consumer</code>
-function has acquired the permit in the semaphore (<code class="highlighter-rouge">lock</code>) then <code class="highlighter-rouge">producer</code> will
-have to wait until <code class="highlighter-rouge">consumer</code> finishes and <code class="highlighter-rouge">release</code>s it. The same applies if
-<code class="highlighter-rouge">producer</code> acquires <code class="highlighter-rouge">lock</code> first. In fact this pattern of getting and then
-releasing a single permit to control access to a critical section is so often
-used that there is a specific call for that, <code class="highlighter-rouge">.withPermit</code>. Using that call to
-rewrite <code class="highlighter-rouge">producer</code> we would have:</p>
-
-<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="nn">cats.effect.concurrent.Semaphore</span>
-<span class="k">import</span> <span class="nn">cats.effect.IO</span>
-<span class="k">import</span> <span class="nn">cats.implicits._</span>
-
-<span class="k">import</span> <span class="nn">scala.collection.mutable</span>
-
-<span class="k">def</span> <span class="n">producer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">buffer</span><span class="k">:</span> <span class="kt">mutable.Buffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">],</span> <span class="n">lock</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
-  <span class="k">for</span> <span class="o">{</span>
-    <span class="n">i</span> <span class="k">&lt;-</span> <span class="n">create</span>
-    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">lock</span><span class="o">.</span><span class="n">withPermit</span> <span class="o">{</span> <span class="c1">// Enter critical section, wait if lock already acquired, release when done
-</span>      <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">buffer</span><span class="o">.</span><span class="n">append</span><span class="o">(</span><span class="n">i</span><span class="o">))</span>
-    <span class="o">}</span>
-    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">producer</span><span class="o">(</span><span class="n">buffer</span><span class="o">,</span> <span class="n">lock</span><span class="o">)</span>
-  <span class="o">}</span> <span class="k">yield</span> <span class="o">()</span>
-</code></pre></div></div>
-
-<p>As a brief exercise you can try to reimplement <code class="highlighter-rouge">consumer</code> using the
-<code class="highlighter-rouge">.withPermit</code> call.</p>
-
-<p>Now this code is safe but not terribly efficient. Note that <code class="highlighter-rouge">consumer</code> runs even
-when there is no data to be read, in such case it will not invoke <code class="highlighter-rouge">process</code>. If
-the producer is ‘slow’ to create new data then <code class="highlighter-rouge">consumer</code> will often run with no
-purpose (as the buffer will be empty) and so pointlessly using CPU. Ideally the
-semaphore will block the consumer until some data is available.</p>
-
-<p>To solve this we can use an additional semaphore that counts the number of items
-in the buffer, we will call this semaphore <code class="highlighter-rouge">filled</code>. The <code class="highlighter-rouge">producer</code> function
-will add a new permit to the semaphore every time it inserts a new data item in
-the buffer, while <code class="highlighter-rouge">consumer</code> will ask for a permit from that semaphore before
-proceeding to extract a data item. Now we are sure that whenever <code class="highlighter-rouge">consumer</code>
-access the buffer there will be data to read, so we do not need to check if the
-buffer is empty prior to access it.</p>
-
-<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="nn">cats.effect.ExitCase.</span><span class="o">{</span><span class="nc">Canceled</span><span class="o">,</span> <span class="nc">Completed</span><span class="o">,</span> <span class="nc">Error</span><span class="o">}</span>
-<span class="k">import</span> <span class="nn">cats.effect.concurrent.Semaphore</span>
-<span class="k">import</span> <span class="nn">cats.effect.</span><span class="o">{</span><span class="nc">ExitCode</span><span class="o">,</span> <span class="nc">IO</span><span class="o">,</span> <span class="nc">IOApp</span><span class="o">}</span>
-<span class="k">import</span> <span class="nn">cats.implicits._</span>
-
-<span class="k">import</span> <span class="nn">scala.collection.mutable</span>
-
-<span class="k">object</span> <span class="nc">SemaphoreProducerConsumerUnboundedQueuev2</span> <span class="k">extends</span> <span class="nc">IOApp</span> <span class="o">{</span>
-
-  <span class="k">def</span> <span class="n">process</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">i</span><span class="k">:</span> <span class="kt">Int</span><span class="o">)</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
-</span>  <span class="k">def</span> <span class="n">create</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">]</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Int</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
+  <span class="k">def</span> <span class="n">consumer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span><span class="kt">:</span> <span class="kt">Sync:</span> <span class="kt">ContextShift</span><span class="o">](</span><span class="n">id</span><span class="k">:</span> <span class="kt">Int</span><span class="o">,</span> <span class="n">queueR</span><span class="k">:</span> <span class="kt">Ref</span><span class="o">[</span><span class="kt">F</span>, <span class="kt">Queue</span><span class="o">[</span><span class="kt">Int</span><span class="o">]],</span> <span class="n">filled</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
 </span>
-  <span class="k">def</span> <span class="n">producer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">buffer</span><span class="k">:</span> <span class="kt">mutable.Buffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">],</span> <span class="n">lock</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">],</span> <span class="n">filled</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
-    <span class="k">for</span> <span class="o">{</span>
-      <span class="n">i</span> <span class="k">&lt;-</span> <span class="n">create</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">lock</span><span class="o">.</span><span class="n">withPermit</span> <span class="o">{</span> <span class="c1">// Enter critical section, wait if lock already acquired, release when done
-</span>        <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">buffer</span><span class="o">.</span><span class="n">append</span><span class="o">(</span><span class="n">i</span><span class="o">))</span>
-      <span class="o">}</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">filled</span><span class="o">.</span><span class="n">release</span>    <span class="c1">// Signal new item in buffer
-</span>      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">producer</span><span class="o">(</span><span class="n">buffer</span><span class="o">,</span> <span class="n">lock</span><span class="o">,</span> <span class="n">filled</span><span class="o">)</span>
-    <span class="o">}</span> <span class="k">yield</span> <span class="o">()</span>
-
-  <span class="k">def</span> <span class="n">consumer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">buffer</span><span class="k">:</span> <span class="kt">mutable.Buffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">],</span> <span class="n">lock</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">],</span> <span class="n">filled</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
-    <span class="k">for</span> <span class="o">{</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">filled</span><span class="o">.</span><span class="n">acquire</span>    <span class="c1">// Wait for some item in buffer
-</span>      <span class="n">i</span> <span class="k">&lt;-</span> <span class="n">lock</span><span class="o">.</span><span class="n">withPermit</span> <span class="o">{</span> <span class="c1">// Enter critical section, wait if lock already acquired, release when done
-</span>        <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">buffer</span><span class="o">.</span><span class="n">remove</span><span class="o">(</span><span class="mi">0</span><span class="o">))</span>
-      <span class="o">}</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">process</span><span class="o">(</span><span class="n">i</span><span class="o">)</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">consumer</span><span class="o">(</span><span class="n">buffer</span><span class="o">,</span> <span class="n">lock</span><span class="o">,</span> <span class="n">filled</span><span class="o">)</span>
-    <span class="o">}</span> <span class="k">yield</span> <span class="o">()</span>
-
   <span class="k">override</span> <span class="k">def</span> <span class="n">run</span><span class="o">(</span><span class="n">args</span><span class="k">:</span> <span class="kt">List</span><span class="o">[</span><span class="kt">String</span><span class="o">])</span><span class="k">:</span> <span class="kt">IO</span><span class="o">[</span><span class="kt">ExitCode</span><span class="o">]</span> <span class="k">=</span>
     <span class="k">for</span> <span class="o">{</span>
-      <span class="n">buffer</span> <span class="k">&lt;-</span> <span class="nc">IO</span><span class="o">(</span><span class="k">new</span> <span class="n">mutable</span><span class="o">.</span><span class="nc">ListBuffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">]())</span>
-      <span class="n">lock</span>   <span class="k">&lt;-</span> <span class="nc">Semaphore</span><span class="o">[</span><span class="kt">IO</span><span class="o">](</span><span class="mi">1</span><span class="o">)</span>
+      <span class="n">queueR</span> <span class="k">&lt;-</span> <span class="nc">Ref</span><span class="o">.</span><span class="n">of</span><span class="o">[</span><span class="kt">IO</span>, <span class="kt">Queue</span><span class="o">[</span><span class="kt">Int</span><span class="o">]](</span><span class="nc">Queue</span><span class="o">.</span><span class="n">empty</span><span class="o">[</span><span class="kt">Int</span><span class="o">])</span>
+      <span class="n">counterR</span> <span class="k">&lt;-</span> <span class="nc">Ref</span><span class="o">.</span><span class="n">of</span><span class="o">[</span><span class="kt">IO</span>, <span class="kt">Int</span><span class="o">](</span><span class="mi">1</span><span class="o">)</span>
       <span class="n">filled</span> <span class="k">&lt;-</span> <span class="nc">Semaphore</span><span class="o">[</span><span class="kt">IO</span><span class="o">](</span><span class="mi">0</span><span class="o">)</span>
-      <span class="n">res</span>    <span class="k">&lt;-</span> <span class="o">(</span><span class="n">producer</span><span class="o">(</span><span class="n">buffer</span><span class="o">,</span> <span class="n">lock</span><span class="o">,</span> <span class="n">filled</span><span class="o">),</span> <span class="n">consumer</span><span class="o">(</span><span class="n">buffer</span><span class="o">,</span> <span class="n">lock</span><span class="o">,</span> <span class="n">filled</span><span class="o">))</span>
-        <span class="o">.</span><span class="n">parMapN</span><span class="o">((</span><span class="k">_</span><span class="o">,</span> <span class="k">_</span><span class="o">)</span> <span class="k">=&gt;</span> <span class="nc">ExitCode</span><span class="o">.</span><span class="nc">Success</span><span class="o">)</span> <span class="c1">// Run producer and consumer in parallel until done (likely by user cancelling with CTRL-C)
-</span>        <span class="o">.</span><span class="n">handleErrorWith</span> <span class="o">{</span> <span class="n">t</span> <span class="k">=&gt;</span>
-          <span class="nc">IO</span><span class="o">(</span><span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Error caught: ${t.getMessage}"</span><span class="o">)).</span><span class="n">as</span><span class="o">(</span><span class="nc">ExitCode</span><span class="o">.</span><span class="nc">Error</span><span class="o">)</span>
-        <span class="o">}</span>
-    <span class="o">}</span> <span class="k">yield</span> <span class="n">res</span>
-<span class="o">}</span>
-</code></pre></div></div>
-
-<p>The full implementation of this producer consumer is available
-<a href="https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catsEffectTutorial/producerconsumer/SemaphoreProducerConsumerUnboundedQueuev2.scala">here</a>.</p>
-
-<p>The <code class="highlighter-rouge">consumer</code> function will wait for having some data available by the call to
-<code class="highlighter-rouge">filled.acquire</code>, which will block until the <code class="highlighter-rouge">filled</code> semaphore has some permit.
-On the other hand the <code class="highlighter-rouge">producer</code> function signals that there is new data in the
-buffer by calling <code class="highlighter-rouge">fill.release</code> which increases the amount of permits.</p>
-
-<p>Note that if <code class="highlighter-rouge">producer</code> had inserted, let’s say, 5 data items, we will increase
-the number of permits by 5 as well with <code class="highlighter-rouge">fill.releaseN(5)</code>. The same applies for
-the <code class="highlighter-rouge">consumer</code> function; if it required, let’s say, 10 data items, then it will
-had to acquire that number of permits with <code class="highlighter-rouge">fill.acquireN(10)</code> before
-proceeding. As you have probable guessed, <code class="highlighter-rouge">.acquire</code> and <code class="highlighter-rouge">.release</code> are
-equivalent to <code class="highlighter-rouge">.acquireN(1)</code> and <code class="highlighter-rouge">.releaseN(1)</code>.</p>
-
-<h3 id="multiple-producer-consumer-with-unbounded-buffer-using-semaphores">Multiple producer-consumer with unbounded buffer using semaphores</h3>
-<p>You may have not noticed, but the code in the previous section is already able
-to handle multiple producers and consumers simultaneously. The only change to do
-is to remove the check in the <code class="highlighter-rouge">process</code> funcion that we introduced at the
-beginning. Why is that? Well, that funtion checked that values received by the
-<code class="highlighter-rouge">process</code>  function follow the sequence generated (<code class="highlighter-rouge">1</code>, <code class="highlighter-rouge">2</code>, <code class="highlighter-rouge">3</code>…). But as now
-there can be several consumers it could be very well that, for example, some
-consumer gets value <code class="highlighter-rouge">5</code>, but before passing it to <code class="highlighter-rouge">process</code> another consumer
-gets <code class="highlighter-rouge">6</code> and invokes <code class="highlighter-rouge">process</code> on that value. That will raise an error as we
-are not passing values to <code class="highlighter-rouge">process</code> in sequential order.</p>
-
-<p>As we have now several concurrent producers then there will be concurrent calls
-to the <code class="highlighter-rouge">create</code> function, all of them modifying the same <code class="highlighter-rouge">counter</code> instance at
-the same time. Fortunately <code class="highlighter-rouge">counter</code> is an instance of <code class="highlighter-rouge">AtomicInteger</code> so it is
-protected against concurrent accesses. If that was not the case we would need to
-protect <code class="highlighter-rouge">counter</code>.</p>
-
-<p>To check that our implementation (after modifying <code class="highlighter-rouge">process</code> as mentioned before)
-can handle several producers and consumers the main program will be modified so
-it starts <code class="highlighter-rouge">10</code> producers and <code class="highlighter-rouge">10</code> consumers. Also each producer/consumer will
-contain an <code class="highlighter-rouge">id</code> and will log a message to the console for each 1000 items
-produced/consumed so we can see that all producers/consumers are alive and
-kicking.</p>
-
-<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="nn">java.util.concurrent.atomic.AtomicInteger</span>
-
-<span class="k">import</span> <span class="nn">cats.effect.concurrent.Semaphore</span>
-<span class="k">import</span> <span class="nn">cats.effect.</span><span class="o">{</span><span class="nc">ExitCode</span><span class="o">,</span> <span class="nc">IO</span><span class="o">,</span> <span class="nc">IOApp</span><span class="o">}</span>
-<span class="k">import</span> <span class="nn">cats.implicits._</span>
-
-<span class="k">import</span> <span class="nn">scala.collection.mutable</span>
-
-<span class="k">object</span> <span class="nc">SemaphoreMultiplesProducerConsumerUnboundedQueue</span> <span class="k">extends</span> <span class="nc">IOApp</span> <span class="o">{</span>
-
-  <span class="k">def</span> <span class="n">process</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">i</span><span class="k">:</span> <span class="kt">Int</span><span class="o">)</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
-    <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span> <span class="o">{</span>
-      <span class="k">if</span> <span class="o">(</span><span class="n">i</span> <span class="o">%</span> <span class="mi">10000</span> <span class="o">==</span> <span class="mi">0</span><span class="o">)</span>
-        <span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Processed $i elements"</span><span class="o">)</span>
-    <span class="o">}</span>
-
-  <span class="k">val</span> <span class="n">counter</span> <span class="k">=</span> <span class="k">new</span> <span class="nc">AtomicInteger</span><span class="o">(</span><span class="mi">0</span><span class="o">)</span>
-  <span class="k">def</span> <span class="n">create</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">]</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Int</span><span class="o">]</span> <span class="k">=</span>
-    <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">counter</span><span class="o">.</span><span class="n">incrementAndGet</span><span class="o">())</span>
-
-  <span class="k">def</span> <span class="n">producer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">id</span><span class="k">:</span> <span class="kt">Int</span><span class="o">,</span> <span class="n">count</span><span class="k">:</span> <span class="kt">Int</span><span class="o">,</span> <span class="n">buffer</span><span class="k">:</span> <span class="kt">mutable.Buffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">],</span> <span class="n">lock</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">],</span> <span class="n">filled</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
-    <span class="k">for</span> <span class="o">{</span>
-      <span class="n">i</span> <span class="k">&lt;-</span> <span class="n">create</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">lock</span><span class="o">.</span><span class="n">withPermit</span> <span class="o">{</span> <span class="c1">// Enter critical section, wait if lock already acquired, release when done
-</span>        <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">buffer</span><span class="o">.</span><span class="n">append</span><span class="o">(</span><span class="n">i</span><span class="o">))</span>
-      <span class="o">}</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">filled</span><span class="o">.</span><span class="n">release</span>    <span class="c1">// Signal new item in buffer
-</span>      <span class="n">newCount</span> <span class="k">=</span> <span class="n">count</span> <span class="o">+</span> <span class="mi">1</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="k">if</span> <span class="o">(</span><span class="n">newCount</span> <span class="o">%</span> <span class="mi">1000</span> <span class="o">==</span> <span class="mi">0</span><span class="o">)</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Producer $id has produced $newCount items"</span><span class="o">))</span> <span class="k">else</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">unit</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">producer</span><span class="o">(</span><span class="n">id</span><span class="o">,</span> <span class="n">newCount</span><span class="o">,</span> <span class="n">buffer</span><span class="o">,</span> <span class="n">lock</span><span class="o">,</span> <span class="n">filled</span><span class="o">)</span>
-    <span class="o">}</span> <span class="k">yield</span> <span class="o">()</span>
-
-  <span class="k">def</span> <span class="n">consumer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">id</span><span class="k">:</span> <span class="kt">Int</span><span class="o">,</span> <span class="n">count</span><span class="k">:</span> <span class="kt">Int</span><span class="o">,</span> <span class="n">buffer</span><span class="k">:</span> <span class="kt">mutable.Buffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">],</span> <span class="n">lock</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">],</span> <span class="n">filled</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
-    <span class="k">for</span> <span class="o">{</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">filled</span><span class="o">.</span><span class="n">acquire</span>    <span class="c1">// Wait for some item in buffer
-</span>      <span class="n">i</span> <span class="k">&lt;-</span> <span class="n">lock</span><span class="o">.</span><span class="n">withPermit</span> <span class="o">{</span> <span class="c1">// Enter critical section, wait if lock already acquired, release when done
-</span>        <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">buffer</span><span class="o">.</span><span class="n">remove</span><span class="o">(</span><span class="mi">0</span><span class="o">))</span>
-      <span class="o">}</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">process</span><span class="o">(</span><span class="n">i</span><span class="o">)</span>
-      <span class="n">newCount</span> <span class="k">=</span> <span class="n">count</span> <span class="o">+</span> <span class="mi">1</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="k">if</span> <span class="o">(</span><span class="n">newCount</span> <span class="o">%</span> <span class="mi">1000</span> <span class="o">==</span> <span class="mi">0</span><span class="o">)</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Consumer $id has consumed $newCount items"</span><span class="o">))</span> <span class="k">else</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">unit</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">consumer</span><span class="o">(</span><span class="n">id</span><span class="o">,</span> <span class="n">newCount</span><span class="o">,</span> <span class="n">buffer</span><span class="o">,</span> <span class="n">lock</span><span class="o">,</span> <span class="n">filled</span><span class="o">)</span>
-    <span class="o">}</span> <span class="k">yield</span> <span class="o">()</span>
-
-  <span class="k">override</span> <span class="k">def</span> <span class="n">run</span><span class="o">(</span><span class="n">args</span><span class="k">:</span> <span class="kt">List</span><span class="o">[</span><span class="kt">String</span><span class="o">])</span><span class="k">:</span> <span class="kt">IO</span><span class="o">[</span><span class="kt">ExitCode</span><span class="o">]</span> <span class="k">=</span>
-    <span class="k">for</span> <span class="o">{</span>
-      <span class="n">buffer</span> <span class="k">&lt;-</span> <span class="nc">IO</span><span class="o">(</span><span class="k">new</span> <span class="n">mutable</span><span class="o">.</span><span class="nc">ListBuffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">]())</span>
-      <span class="n">lock</span> <span class="k">&lt;-</span> <span class="nc">Semaphore</span><span class="o">[</span><span class="kt">IO</span><span class="o">](</span><span class="mi">1</span><span class="o">)</span>
-      <span class="n">filled</span> <span class="k">&lt;-</span> <span class="nc">Semaphore</span><span class="o">[</span><span class="kt">IO</span><span class="o">](</span><span class="mi">0</span><span class="o">)</span>
-      <span class="n">producers</span> <span class="k">&lt;-</span> <span class="nc">List</span><span class="o">.</span><span class="n">range</span><span class="o">(</span><span class="mi">1</span><span class="o">,</span> <span class="mi">11</span><span class="o">).</span><span class="n">map</span><span class="o">(</span><span class="n">producer</span><span class="o">(</span><span class="k">_</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="n">buffer</span><span class="o">,</span> <span class="n">lock</span><span class="o">,</span> <span class="n">filled</span><span class="o">)).</span><span class="n">pure</span><span class="o">[</span><span class="kt">IO</span><span class="o">]</span> <span class="c1">// 10 producers
-</span>      <span class="n">consumers</span> <span class="k">&lt;-</span> <span class="nc">List</span><span class="o">.</span><span class="n">range</span><span class="o">(</span><span class="mi">1</span><span class="o">,</span> <span class="mi">11</span><span class="o">).</span><span class="n">map</span><span class="o">(</span><span class="n">consumer</span><span class="o">(</span><span class="k">_</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="n">buffer</span><span class="o">,</span> <span class="n">lock</span><span class="o">,</span> <span class="n">filled</span><span class="o">)).</span><span class="n">pure</span><span class="o">[</span><span class="kt">IO</span><span class="o">]</span> <span class="c1">// 10 consumers
+      <span class="n">producers</span> <span class="k">=</span> <span class="nc">List</span><span class="o">.</span><span class="n">range</span><span class="o">(</span><span class="mi">1</span><span class="o">,</span> <span class="mi">11</span><span class="o">).</span><span class="n">map</span><span class="o">(</span><span class="n">producer</span><span class="o">(</span><span class="k">_</span><span class="o">,</span> <span class="n">queueR</span><span class="o">,</span> <span class="n">counterR</span><span class="o">,</span> <span class="n">filled</span><span class="o">))</span> <span class="c1">// 10 producers
+</span>      <span class="n">consumers</span> <span class="k">=</span> <span class="nc">List</span><span class="o">.</span><span class="n">range</span><span class="o">(</span><span class="mi">1</span><span class="o">,</span> <span class="mi">11</span><span class="o">).</span><span class="n">map</span><span class="o">(</span><span class="n">consumer</span><span class="o">(</span><span class="k">_</span><span class="o">,</span> <span class="n">queueR</span><span class="o">,</span> <span class="n">filled</span><span class="o">))</span>           <span class="c1">// 10 consumers
 </span>      <span class="n">res</span> <span class="k">&lt;-</span> <span class="o">(</span><span class="n">producers</span> <span class="o">++</span> <span class="n">consumers</span><span class="o">)</span>
-        <span class="o">.</span><span class="n">parSequence</span> <span class="c1">// Run producers and consumers in parallel until done (likely by user cancelling with CTRL-C)
-</span>        <span class="o">.</span><span class="n">as</span><span class="o">(</span><span class="nc">ExitCode</span><span class="o">.</span><span class="nc">Success</span><span class="o">)</span>
-        <span class="o">.</span><span class="n">handleErrorWith</span> <span class="o">{</span> <span class="n">t</span> <span class="k">=&gt;</span>
+        <span class="o">.</span><span class="n">parSequence</span><span class="o">.</span><span class="n">as</span><span class="o">(</span><span class="nc">ExitCode</span><span class="o">.</span><span class="nc">Success</span><span class="o">)</span> <span class="c1">// Run producers and consumers in parallel until done (likely by user cancelling with CTRL-C)
+</span>        <span class="o">.</span><span class="n">handleErrorWith</span> <span class="o">{</span> <span class="n">t</span> <span class="k">=&gt;</span>
           <span class="nc">IO</span><span class="o">(</span><span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Error caught: ${t.getMessage}"</span><span class="o">)).</span><span class="n">as</span><span class="o">(</span><span class="nc">ExitCode</span><span class="o">.</span><span class="nc">Error</span><span class="o">)</span>
         <span class="o">}</span>
     <span class="o">}</span> <span class="k">yield</span> <span class="n">res</span>
@@ -989,86 +834,78 @@ kicking.</p>
 </code></pre></div></div>
 
 <p>The full implementation of this producer consumer with unbounded queue is available
-<a href="https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catsEffectTutorial/producerconsumer/SemaphoreMultiplesProducerConsumerUnboundedQueue.scala">here</a>.</p>
+<a href="https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catseffecttutorial/producerconsumer/ProducerConsumer.scala">here</a>.</p>
 
-<p>Now producers and consumers are started all in parallel by means of
-<code class="highlighter-rouge">.parSequence</code>. This call will transform the <code class="highlighter-rouge">List[IO[Unit]]</code> passed as
-parameter and transform it into <code class="highlighter-rouge">IO[List[Unit]]</code>. We could have used <code class="highlighter-rouge">parMapM</code>
-here as well but in this case <code class="highlighter-rouge">.parSequence</code> is way more handy. All <code class="highlighter-rouge">IO</code>
-instances are started concurrently in their own fiber. As with <code class="highlighter-rouge">.parMapN</code>, the
-<code class="highlighter-rouge">parSequence</code> call will not return until all <code class="highlighter-rouge">IO</code>s are finished or any of them
-is halted by an error or cancelled. If all <code class="highlighter-rouge">IO</code>s were successfully run then the
-call to <code class="highlighter-rouge">.as</code> will discard the result (<code class="highlighter-rouge">List[Unit]</code>) and returns
-<code class="highlighter-rouge">ExitCode.Success</code>.</p>
+<p>Producers and consumers are created as two list of <code class="highlighter-rouge">IO</code> instances. All of them
+are started in their own fiber by the call to <code class="highlighter-rouge">parSequence</code>, which will wait for
+all of them to finish and then return the value passed as parameter.</p>
 
-<h3 id="multiple-producer-consumer-with-bounded-buffer-using-semaphores">Multiple producer-consumer with bounded buffer using semaphores</h3>
-<p>A more interesting challenge is to introduce the use of bunded buffers. In this
-new scenario, each producer must wait for the buffer to have some empty buckets
-before inserting new data.</p>
+<p>Having several consumers and producers improves the balance between consumers
+and producers… but still, on the long run, queue tends to grow in size. To
+fix this we will ensure the size of the queue is bounded, so whenever that max
+size is reached producers will block as they consumers do when the queue is
+empty.</p>
 
-<p>This scenario is solved with two semaphores. First one will keep the count of data
-items in the buffer, second one will keep the count of empty buckets. <code class="highlighter-rouge">consumer</code>
-will block if no items are in the buffer and will signal about new empty
-buckets, <code class="highlighter-rouge">producer</code> will likewise block if no empty buckets are available and
-will signal about new data items in the buffer.</p>
+<h3 id="producer-consumer-with-bounded-queue">Producer consumer with bounded queue</h3>
+<p>We will use another semaphore <code class="highlighter-rouge">empty</code> to represent the amount of empty ‘sockets’
+in the queue. It will mirror the behavior of <code class="highlighter-rouge">filled</code>. When a new item is
+enqueued a call to <code class="highlighter-rouge">empty.release</code> will signal that there is a new empty socket
+in the queue. Likewise, the producers will request an empty socket by calling
+<code class="highlighter-rouge">empty.acquire</code> prior to add new elements, blocking when <code class="highlighter-rouge">empty</code> number of
+permits is zero.</p>
 
-<p>Using this approach we have this new implementation (it assumes a buffer size of
-<code class="highlighter-rouge">100</code> buckets):</p>
+<p>Producer and consumer code now becomes:</p>
 
-<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="nn">java.util.concurrent.atomic.AtomicInteger</span>
-
-<span class="k">import</span> <span class="nn">cats.effect.concurrent.Semaphore</span>
-<span class="k">import</span> <span class="nn">cats.effect.</span><span class="o">{</span><span class="nc">ExitCode</span><span class="o">,</span> <span class="nc">IO</span><span class="o">,</span> <span class="nc">IOApp</span><span class="o">}</span>
+<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="nn">cats.effect.concurrent.</span><span class="o">{</span><span class="nc">Ref</span><span class="o">,</span> <span class="nc">Semaphore</span><span class="o">}</span>
+<span class="k">import</span> <span class="nn">cats.effect._</span>
 <span class="k">import</span> <span class="nn">cats.implicits._</span>
 
-<span class="k">import</span> <span class="nn">scala.collection.mutable</span>
+<span class="k">import</span> <span class="nn">scala.collection.immutable.Queue</span>
 
-<span class="k">object</span> <span class="nc">SemaphoreMultiplesProducerConsumerBoundedQueue</span> <span class="k">extends</span> <span class="nc">IOApp</span> <span class="o">{</span>
+<span class="k">def</span> <span class="n">producer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span><span class="kt">:</span> <span class="kt">Sync:</span> <span class="kt">ContextShift</span><span class="o">](</span><span class="n">id</span><span class="k">:</span> <span class="kt">Int</span><span class="o">,</span> <span class="n">queueR</span><span class="k">:</span> <span class="kt">Ref</span><span class="o">[</span><span class="kt">F</span>, <span class="kt">Queue</span><span class="o">[</span><span class="kt">Int</span><span class="o">]],</span> <span class="n">counterR</span><span class="k">:</span> <span class="kt">Ref</span><span class="o">[</span><span class="kt">F</span>, <span class="kt">Int</span><span class="o">],</span> <span class="n">empty</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">],</span> <span class="n">filled</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
+  <span class="o">(</span><span class="k">for</span> <span class="o">{</span>
+    <span class="n">i</span> <span class="k">&lt;-</span> <span class="n">counterR</span><span class="o">.</span><span class="n">getAndUpdate</span><span class="o">(</span><span class="k">_</span> <span class="o">+</span> <span class="mi">1</span><span class="o">)</span>
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">empty</span><span class="o">.</span><span class="n">acquire</span>  <span class="c1">// Wait for some socket free in queue
+</span>    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">queueR</span><span class="o">.</span><span class="n">getAndUpdate</span><span class="o">(</span><span class="k">_</span><span class="o">.</span><span class="n">enqueue</span><span class="o">(</span><span class="n">i</span><span class="o">))</span>
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">filled</span><span class="o">.</span><span class="n">release</span> <span class="c1">// Signal new item in queue
+</span>    <span class="k">_</span> <span class="k">&lt;-</span> <span class="k">if</span><span class="o">(</span><span class="n">i</span> <span class="o">%</span> <span class="mi">10000</span> <span class="o">==</span> <span class="mi">0</span><span class="o">)</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Producer $id has reached $i items"</span><span class="o">))</span> <span class="k">else</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">unit</span>
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="nc">ContextShift</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">shift</span>
+  <span class="o">}</span> <span class="k">yield</span> <span class="o">())</span> <span class="o">&gt;&gt;</span> <span class="n">producer</span><span class="o">(</span><span class="n">id</span><span class="o">,</span> <span class="n">queueR</span><span class="o">,</span> <span class="n">counterR</span><span class="o">,</span> <span class="n">empty</span><span class="o">,</span> <span class="n">filled</span><span class="o">)</span>
 
-  <span class="k">def</span> <span class="n">process</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">i</span><span class="k">:</span> <span class="kt">Int</span><span class="o">)</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
-    <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span> <span class="o">{</span>
-      <span class="k">if</span> <span class="o">(</span><span class="n">i</span> <span class="o">%</span> <span class="mi">10000</span> <span class="o">==</span> <span class="mi">0</span><span class="o">)</span>
-        <span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Processed $i elements"</span><span class="o">)</span>
-    <span class="o">}</span>
+<span class="k">def</span> <span class="n">consumer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span><span class="kt">:</span> <span class="kt">Sync:</span> <span class="kt">ContextShift</span><span class="o">](</span><span class="n">id</span><span class="k">:</span> <span class="kt">Int</span><span class="o">,</span> <span class="n">queueR</span><span class="k">:</span> <span class="kt">Ref</span><span class="o">[</span><span class="kt">F</span>, <span class="kt">Queue</span><span class="o">[</span><span class="kt">Int</span><span class="o">]],</span> <span class="n">empty</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">],</span> <span class="n">filled</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
+  <span class="o">(</span><span class="k">for</span> <span class="o">{</span>
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">filled</span><span class="o">.</span><span class="n">acquire</span> <span class="c1">// Wait for some item in queue
+</span>    <span class="n">i</span> <span class="k">&lt;-</span> <span class="n">queueR</span><span class="o">.</span><span class="n">modify</span><span class="o">(</span><span class="k">_</span><span class="o">.</span><span class="n">dequeue</span><span class="o">.</span><span class="n">swap</span><span class="o">)</span>
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">empty</span><span class="o">.</span><span class="n">release</span>  <span class="c1">// Signal new socket free in queue
+</span>    <span class="k">_</span> <span class="k">&lt;-</span> <span class="k">if</span><span class="o">(</span><span class="n">i</span> <span class="o">%</span> <span class="mi">10000</span> <span class="o">==</span> <span class="mi">0</span><span class="o">)</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Consumer $id has reached $i items"</span><span class="o">))</span> <span class="k">else</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">unit</span>
+    <span class="k">_</span> <span class="k">&lt;-</span> <span class="nc">ContextShift</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">shift</span>
+  <span class="o">}</span> <span class="k">yield</span> <span class="o">())</span> <span class="o">&gt;&gt;</span> <span class="n">consumer</span><span class="o">(</span><span class="n">id</span><span class="o">,</span> <span class="n">queueR</span><span class="o">,</span> <span class="n">empty</span><span class="o">,</span> <span class="n">filled</span><span class="o">)</span>
+</code></pre></div></div>
 
-  <span class="k">val</span> <span class="n">counter</span> <span class="k">=</span> <span class="k">new</span> <span class="nc">AtomicInteger</span><span class="o">(</span><span class="mi">0</span><span class="o">)</span>
-  <span class="k">def</span> <span class="n">create</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">]</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Int</span><span class="o">]</span> <span class="k">=</span>
-    <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">counter</span><span class="o">.</span><span class="n">incrementAndGet</span><span class="o">())</span>
+<p>The main program is almost the same, we only add the creation of the <code class="highlighter-rouge">empty</code>
+semaphore setting as value the max size of the queue. So for a max size of <code class="highlighter-rouge">100</code>
+we would have:</p>
 
-  <span class="k">def</span> <span class="n">producer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">id</span><span class="k">:</span> <span class="kt">Int</span><span class="o">,</span> <span class="n">count</span><span class="k">:</span> <span class="kt">Int</span><span class="o">,</span> <span class="n">buffer</span><span class="k">:</span> <span class="kt">mutable.Buffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">],</span> <span class="n">lock</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">],</span> <span class="n">empty</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">],</span> <span class="n">filled</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
-    <span class="k">for</span> <span class="o">{</span>
-      <span class="n">i</span> <span class="k">&lt;-</span> <span class="n">create</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">empty</span><span class="o">.</span><span class="n">acquire</span>     <span class="c1">// Wait for some empty bucket
-</span>      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">lock</span><span class="o">.</span><span class="n">withPermit</span> <span class="o">{</span> <span class="c1">// Enter critical section, wait if lock already acquired, release when done
-</span>        <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">buffer</span><span class="o">.</span><span class="n">append</span><span class="o">(</span><span class="n">i</span><span class="o">))</span>
-      <span class="o">}</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">filled</span><span class="o">.</span><span class="n">release</span>    <span class="c1">// Signal new item in buffer
-</span>      <span class="n">newCount</span> <span class="k">=</span> <span class="n">count</span> <span class="o">+</span> <span class="mi">1</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="k">if</span> <span class="o">(</span><span class="n">newCount</span> <span class="o">%</span> <span class="mi">1000</span> <span class="o">==</span> <span class="mi">0</span><span class="o">)</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Producer $id has produced $newCount items"</span><span class="o">))</span> <span class="k">else</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">unit</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">producer</span><span class="o">(</span><span class="n">id</span><span class="o">,</span> <span class="n">newCount</span><span class="o">,</span> <span class="n">buffer</span><span class="o">,</span> <span class="n">lock</span><span class="o">,</span> <span class="n">empty</span><span class="o">,</span> <span class="n">filled</span><span class="o">)</span>
-    <span class="o">}</span> <span class="k">yield</span> <span class="o">()</span>
+<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="nn">cats.effect.concurrent.</span><span class="o">{</span><span class="nc">Ref</span><span class="o">,</span> <span class="nc">Semaphore</span><span class="o">}</span>
+<span class="k">import</span> <span class="nn">cats.effect._</span>
+<span class="k">import</span> <span class="nn">cats.implicits._</span>
 
-  <span class="k">def</span> <span class="n">consumer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span> <span class="kt">:</span> <span class="kt">Sync</span><span class="o">](</span><span class="n">id</span><span class="k">:</span> <span class="kt">Int</span><span class="o">,</span> <span class="n">count</span><span class="k">:</span> <span class="kt">Int</span><span class="o">,</span> <span class="n">buffer</span><span class="k">:</span> <span class="kt">mutable.Buffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">],</span> <span class="n">lock</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">],</span> <span class="n">empty</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">],</span> <span class="n">filled</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
-    <span class="k">for</span> <span class="o">{</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">filled</span><span class="o">.</span><span class="n">acquire</span>    <span class="c1">// Wait for some item in buffer
-</span>      <span class="n">i</span> <span class="k">&lt;-</span> <span class="n">lock</span><span class="o">.</span><span class="n">withPermit</span> <span class="o">{</span> <span class="c1">// Enter critical section, wait if lock already acquired, release when done
-</span>        <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">buffer</span><span class="o">.</span><span class="n">remove</span><span class="o">(</span><span class="mi">0</span><span class="o">))</span>
-      <span class="o">}</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">empty</span><span class="o">.</span><span class="n">release</span>     <span class="c1">// Signal new empty bucket
-</span>      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">process</span><span class="o">(</span><span class="n">i</span><span class="o">)</span>
-      <span class="n">newCount</span> <span class="k">=</span> <span class="n">count</span> <span class="o">+</span> <span class="mi">1</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="k">if</span> <span class="o">(</span><span class="n">newCount</span> <span class="o">%</span> <span class="mi">1000</span> <span class="o">==</span> <span class="mi">0</span><span class="o">)</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Consumer $id has consumed $newCount items"</span><span class="o">))</span> <span class="k">else</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">unit</span>
-      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">consumer</span><span class="o">(</span><span class="n">id</span><span class="o">,</span> <span class="n">newCount</span><span class="o">,</span> <span class="n">buffer</span><span class="o">,</span> <span class="n">lock</span><span class="o">,</span> <span class="n">empty</span><span class="o">,</span> <span class="n">filled</span><span class="o">)</span>
-    <span class="o">}</span> <span class="k">yield</span> <span class="o">()</span>
+<span class="k">import</span> <span class="nn">scala.collection.immutable.Queue</span>
 
+<span class="k">object</span> <span class="nc">ProducerConsumerBounded</span> <span class="k">extends</span> <span class="nc">IOApp</span> <span class="o">{</span>
+
+  <span class="k">def</span> <span class="n">producer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span><span class="kt">:</span> <span class="kt">Sync:</span> <span class="kt">ContextShift</span><span class="o">](</span><span class="n">id</span><span class="k">:</span> <span class="kt">Int</span><span class="o">,</span> <span class="n">queueR</span><span class="k">:</span> <span class="kt">Ref</span><span class="o">[</span><span class="kt">F</span>, <span class="kt">Queue</span><span class="o">[</span><span class="kt">Int</span><span class="o">]],</span> <span class="n">counterR</span><span class="k">:</span> <span class="kt">Ref</span><span class="o">[</span><span class="kt">F</span>, <span class="kt">Int</span><span class="o">],</span> <span class="n">empty</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">],</span> <span class="n">filled</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
+</span>
+  <span class="k">def</span> <span class="n">consumer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span><span class="kt">:</span> <span class="kt">Sync:</span> <span class="kt">ContextShift</span><span class="o">](</span><span class="n">id</span><span class="k">:</span> <span class="kt">Int</span><span class="o">,</span> <span class="n">queueR</span><span class="k">:</span> <span class="kt">Ref</span><span class="o">[</span><span class="kt">F</span>, <span class="kt">Queue</span><span class="o">[</span><span class="kt">Int</span><span class="o">]],</span> <span class="n">empty</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">],</span> <span class="n">filled</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span> <span class="o">???</span> <span class="c1">// As defined before
+</span>
   <span class="k">override</span> <span class="k">def</span> <span class="n">run</span><span class="o">(</span><span class="n">args</span><span class="k">:</span> <span class="kt">List</span><span class="o">[</span><span class="kt">String</span><span class="o">])</span><span class="k">:</span> <span class="kt">IO</span><span class="o">[</span><span class="kt">ExitCode</span><span class="o">]</span> <span class="k">=</span>
     <span class="k">for</span> <span class="o">{</span>
-      <span class="n">buffer</span> <span class="k">&lt;-</span> <span class="nc">IO</span><span class="o">(</span><span class="k">new</span> <span class="n">mutable</span><span class="o">.</span><span class="nc">ListBuffer</span><span class="o">[</span><span class="kt">Int</span><span class="o">]())</span>
-      <span class="n">lock</span> <span class="k">&lt;-</span> <span class="nc">Semaphore</span><span class="o">[</span><span class="kt">IO</span><span class="o">](</span><span class="mi">1</span><span class="o">)</span>
+      <span class="n">queueR</span> <span class="k">&lt;-</span> <span class="nc">Ref</span><span class="o">.</span><span class="n">of</span><span class="o">[</span><span class="kt">IO</span>, <span class="kt">Queue</span><span class="o">[</span><span class="kt">Int</span><span class="o">]](</span><span class="nc">Queue</span><span class="o">.</span><span class="n">empty</span><span class="o">[</span><span class="kt">Int</span><span class="o">])</span>
+      <span class="n">counterR</span> <span class="k">&lt;-</span> <span class="nc">Ref</span><span class="o">.</span><span class="n">of</span><span class="o">[</span><span class="kt">IO</span>, <span class="kt">Int</span><span class="o">](</span><span class="mi">1</span><span class="o">)</span>
       <span class="n">empty</span> <span class="k">&lt;-</span> <span class="nc">Semaphore</span><span class="o">[</span><span class="kt">IO</span><span class="o">](</span><span class="mi">100</span><span class="o">)</span>
       <span class="n">filled</span> <span class="k">&lt;-</span> <span class="nc">Semaphore</span><span class="o">[</span><span class="kt">IO</span><span class="o">](</span><span class="mi">0</span><span class="o">)</span>
-      <span class="n">producers</span> <span class="k">&lt;-</span> <span class="nc">List</span><span class="o">.</span><span class="n">range</span><span class="o">(</span><span class="mi">1</span><span class="o">,</span> <span class="mi">11</span><span class="o">).</span><span class="n">map</span><span class="o">(</span><span class="n">producer</span><span class="o">(</span><span class="k">_</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="n">buffer</span><span class="o">,</span> <span class="n">lock</span><span class="o">,</span> <span class="n">empty</span><span class="o">,</span> <span class="n">filled</span><span class="o">)).</span><span class="n">pure</span><span class="o">[</span><span class="kt">IO</span><span class="o">]</span> <span class="c1">// 10 producers
-</span>      <span class="n">consumers</span> <span class="k">&lt;-</span> <span class="nc">List</span><span class="o">.</span><span class="n">range</span><span class="o">(</span><span class="mi">1</span><span class="o">,</span> <span class="mi">11</span><span class="o">).</span><span class="n">map</span><span class="o">(</span><span class="n">consumer</span><span class="o">(</span><span class="k">_</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="n">buffer</span><span class="o">,</span> <span class="n">lock</span><span class="o">,</span> <span class="n">empty</span><span class="o">,</span> <span class="n">filled</span><span class="o">)).</span><span class="n">pure</span><span class="o">[</span><span class="kt">IO</span><span class="o">]</span> <span class="c1">// 10 consumers
+      <span class="n">producers</span> <span class="k">=</span> <span class="nc">List</span><span class="o">.</span><span class="n">range</span><span class="o">(</span><span class="mi">1</span><span class="o">,</span> <span class="mi">11</span><span class="o">).</span><span class="n">map</span><span class="o">(</span><span class="n">producer</span><span class="o">(</span><span class="k">_</span><span class="o">,</span> <span class="n">queueR</span><span class="o">,</span> <span class="n">counterR</span><span class="o">,</span> <span class="n">empty</span><span class="o">,</span> <span class="n">filled</span><span class="o">))</span> <span class="c1">// 10 producers
+</span>      <span class="n">consumers</span> <span class="k">=</span> <span class="nc">List</span><span class="o">.</span><span class="n">range</span><span class="o">(</span><span class="mi">1</span><span class="o">,</span> <span class="mi">11</span><span class="o">).</span><span class="n">map</span><span class="o">(</span><span class="n">consumer</span><span class="o">(</span><span class="k">_</span><span class="o">,</span> <span class="n">queueR</span><span class="o">,</span> <span class="n">empty</span><span class="o">,</span> <span class="n">filled</span><span class="o">))</span>           <span class="c1">// 10 consumers
 </span>      <span class="n">res</span> <span class="k">&lt;-</span> <span class="o">(</span><span class="n">producers</span> <span class="o">++</span> <span class="n">consumers</span><span class="o">)</span>
         <span class="o">.</span><span class="n">parSequence</span><span class="o">.</span><span class="n">as</span><span class="o">(</span><span class="nc">ExitCode</span><span class="o">.</span><span class="nc">Success</span><span class="o">)</span> <span class="c1">// Run producers and consumers in parallel until done (likely by user cancelling with CTRL-C)
 </span>        <span class="o">.</span><span class="n">handleErrorWith</span> <span class="o">{</span> <span class="n">t</span> <span class="k">=&gt;</span>
@@ -1079,14 +916,49 @@ will signal about new data items in the buffer.</p>
 </code></pre></div></div>
 
 <p>The full implementation of this producer consumer with bounded queue is available
-<a href="https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catsEffectTutorial/producerconsumer/SemaphoreMultiplesProducerConsumerBoundedQueue.scala">here</a>.</p>
+<a href="https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catseffecttutorial/producerconsumer/ProducerConsumerBounded.scala">here</a>.</p>
 
-<p>The <code class="highlighter-rouge">empty</code> semaphore carries the amount of empty buckets. Initially all buckets
-are empty so we assign as many permits as the buffer size <code class="highlighter-rouge">100</code>. The <code class="highlighter-rouge">filled</code>
-semaphore carries no permits at the beginning as there is no data items in the
-buffer yet. Then <code class="highlighter-rouge">producer</code> and <code class="highlighter-rouge">consumer</code> use them to keep trace of number of
-available items/empty buckets in the buffer. Finally we still have to use <code class="highlighter-rouge">lock</code>
-to protect access to the shared buffer.</p>
+<h3 id="on-cancellation-of-producer-and-consumers">On cancellation of producer and consumers</h3>
+<p>In our producers/consumers code we have not dealt yet with cancellation. Truth
+is the only cancellation that can happen in those small programs is caused by
+the user ‘killing’ the main program, and in that case we are not much concerned
+about the consequences (the program has terminated after all). But in more
+complex settings we have to be careful as any other fiber could cancel any
+producer or consumer at any time. And which will then be the consequences? Well,
+basically we would not be able to trust our semaphores to represent the amount
+of items and free sockets in the queue. See for example the code of a consumer
+in our bounded queue setting. It must make sure that whenever a <code class="highlighter-rouge">filled</code> permit
+is acquired then a) a new element is added and b) <code class="highlighter-rouge">empty.release</code> is called. A
+cancellation right before those actions will leave the semaphores with values
+that do not represent the internal state of the queue.A cancellation right
+before those actions will leave the semaphores with values that do not represent
+the internal state of the queue.</p>
+
+<p>To prevent this we must make sure that a call to a producer and a consumer is
+fully run without being cancelled. This can be done with <code class="highlighter-rouge">Sync[F].uncancelable</code>,
+which ensures that the <code class="highlighter-rouge">F</code> instance passed as parameter cannot be cancelled. So,
+for example, our consumer in the bounded queue example will look like:</p>
+
+<div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="nn">cats.effect.concurrent.</span><span class="o">{</span><span class="nc">Ref</span><span class="o">,</span> <span class="nc">Semaphore</span><span class="o">}</span>
+<span class="k">import</span> <span class="nn">cats.effect.</span><span class="o">{</span><span class="nc">ContextShift</span><span class="o">,</span> <span class="nc">ExitCode</span><span class="o">,</span> <span class="nc">IO</span><span class="o">,</span> <span class="nc">IOApp</span><span class="o">,</span> <span class="nc">Sync</span><span class="o">}</span>
+<span class="k">import</span> <span class="nn">cats.implicits._</span>
+
+<span class="k">import</span> <span class="nn">scala.collection.immutable.Queue</span>
+
+<span class="k">def</span> <span class="n">consumer</span><span class="o">[</span><span class="kt">F</span><span class="o">[</span><span class="k">_</span><span class="o">]</span><span class="kt">:</span> <span class="kt">Sync:</span> <span class="kt">ContextShift</span><span class="o">](</span><span class="n">id</span><span class="k">:</span> <span class="kt">Int</span><span class="o">,</span> <span class="n">queueR</span><span class="k">:</span> <span class="kt">Ref</span><span class="o">[</span><span class="kt">F</span>, <span class="kt">Queue</span><span class="o">[</span><span class="kt">Int</span><span class="o">]],</span> <span class="n">empty</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">],</span> <span class="n">filled</span><span class="k">:</span> <span class="kt">Semaphore</span><span class="o">[</span><span class="kt">F</span><span class="o">])</span><span class="k">:</span> <span class="kt">F</span><span class="o">[</span><span class="kt">Unit</span><span class="o">]</span> <span class="k">=</span>
+  <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">uncancelable</span><span class="o">(</span>
+    <span class="k">for</span> <span class="o">{</span>
+      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">filled</span><span class="o">.</span><span class="n">acquire</span> <span class="c1">// Wait for some item in queue
+</span>      <span class="n">i</span> <span class="k">&lt;-</span> <span class="n">queueR</span><span class="o">.</span><span class="n">modify</span><span class="o">(</span><span class="k">_</span><span class="o">.</span><span class="n">dequeue</span><span class="o">.</span><span class="n">swap</span><span class="o">)</span>
+      <span class="k">_</span> <span class="k">&lt;-</span> <span class="n">empty</span><span class="o">.</span><span class="n">release</span>
+      <span class="k">_</span> <span class="k">&lt;-</span> <span class="k">if</span><span class="o">(</span><span class="n">i</span> <span class="o">%</span> <span class="mi">10000</span> <span class="o">==</span> <span class="mi">0</span><span class="o">)</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">delay</span><span class="o">(</span><span class="n">println</span><span class="o">(</span><span class="n">s</span><span class="s">"Consumer $id has reached $i items"</span><span class="o">))</span> <span class="k">else</span> <span class="nc">Sync</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">unit</span>
+      <span class="k">_</span> <span class="k">&lt;-</span> <span class="nc">ContextShift</span><span class="o">[</span><span class="kt">F</span><span class="o">].</span><span class="n">shift</span>
+    <span class="o">}</span> <span class="k">yield</span> <span class="o">()</span>
+  <span class="o">)</span> <span class="o">&gt;&gt;</span> <span class="n">consumer</span><span class="o">(</span><span class="n">id</span><span class="o">,</span> <span class="n">queueR</span><span class="o">,</span> <span class="n">empty</span><span class="o">,</span> <span class="n">filled</span><span class="o">)</span>
+</code></pre></div></div>
+
+<p>Making the <code class="highlighter-rouge">producer</code> function uncancelable is similar, we leave that as a small
+exercise.</p>
 
 <h3 id="exercise-build-a-concurrent-queue">Exercise: build a concurrent queue</h3>
 <p>A <em>concurrent queue</em> is, well, a queue data structure that allows safe
@@ -1117,7 +989,7 @@ access.</p>
 
 <p>The exercise is to implement the missing constructor methods we have included in
 <code class="highlighter-rouge">SimpleConcurrentQueue</code> companion object. A possible implementation is given
-<a href="https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catsEffectTutorial/producerconsumer/exerciseconcurrentqueue/SimpleConcurrentQueue.scala">here</a> for reference.</p>
+<a href="https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catseffecttutorial/producerconsumer/exerciseconcurrentqueue/SimpleConcurrentQueue.scala">here</a> for reference.</p>
 
 <p>Finally, we propose you to write a more complete concurrent queue
 implementation with these definitions:</p>
@@ -1175,17 +1047,17 @@ implementation with these definitions:</p>
 <p>Note that now bounded concurrent queues have their own type
 <code class="highlighter-rouge">BoundedConcurrentQueue</code> which extends <code class="highlighter-rouge">ConcurrentQueue</code> with some functions
 specific to them. As before, you should try to implement the builder methods in
-companion object <code class="highlighter-rouge">ConcurrentQueue</code>. Tip: we have not reviewed all methods that
-cats-effect’s <code class="highlighter-rouge">Semaphore</code> has to offer. Take a look to <code class="highlighter-rouge">Semaphore</code>
+companion object <code class="highlighter-rouge">ConcurrentQueue</code>. <strong>Tip</strong>: we have not reviewed all methods
+that cats-effect’s <code class="highlighter-rouge">Semaphore</code> has to offer. Take a look to <code class="highlighter-rouge">Semaphore</code>
 <a href="https://typelevel.org/cats-effect/api/cats/effect/concurrent/Semaphore.html">API</a>
 as you will find some new useful methods there.</p>
 
 <p>A possible implementation of the concurrent queue is given
-<a href="https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catsEffectTutorial/producerconsumer/exerciseconcurrentqueue/ConcurrentQueue.scala">here</a>
-for reference. <strong>NOTE</strong> that concurrent queue implementation is not intended for
+<a href="https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catseffecttutorial/producerconsumer/exerciseconcurrentqueue/ConcurrentQueue.scala">here</a>
+for reference. <strong>NOTE</strong> this concurrent queue implementation is not intended for
 high-throughput requirements, and it has not been tested in production
 environments.  For a production-ready, high-performance concurrent queue it is
-strongly advised to take a look to <a href="https://monix.io/api/current/monix/catnap/ConcurrentQueue.html">Monix’s concurrent
+strongly advised to consider <a href="https://monix.io/api/current/monix/catnap/ConcurrentQueue.html">Monix’s concurrent
 queue</a>, which is
 cats-effect compatible.</p>
 
