@@ -474,7 +474,6 @@ approach, just by replacing any use of <code class="highlighter-rouge">IO</code>
 methods of the <code class="highlighter-rouge">Sync[F[_]]</code> instance!</p>
 
 <div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="nn">cats.effect.Sync</span>
-<span class="k">import</span> <span class="nn">cats.effect.syntax.all._</span>
 <span class="k">import</span> <span class="nn">cats.syntax.all._</span>
 <span class="k">import</span> <span class="nn">java.io._</span>
 
@@ -496,7 +495,6 @@ instantiation:</p>
 
 <div class="language-scala highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="nn">cats.effect._</span>
 <span class="k">import</span> <span class="nn">cats.effect.concurrent.Semaphore</span>
-<span class="k">import</span> <span class="nn">cats.effect.syntax.all._</span>
 <span class="k">import</span> <span class="nn">cats.syntax.all._</span>
 <span class="k">import</span> <span class="nn">java.io._</span>
 
