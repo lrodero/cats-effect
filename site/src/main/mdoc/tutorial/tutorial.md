@@ -767,66 +767,115 @@ Work? Well, it works... but it is far from ideal. If we run it we will find that
 the producer runs faster than the consumer so the queue is constantly growing.
 And, even if that was not the case, we must realize that the consumer will be
 continually running regardless if there are elements in the queue, which is far
-from ideal. We will try to improve it in the next section using _semaphores_.
-Also we will use several consumers and producers to balance production and
-consumption rate.
+from ideal. We will try to improve it in the next section by using
+[Deferred](../concurrency/deferred.md). Also we will use several consumers and
+producers to balance production and consumption rate.
 
-### Bringing in semaphores
-As discussed in the first section of this tutorial, semaphores are used to
-control access to critical sections of our code that handle shared resources,
-when those sections can be run concurrently. Each semaphore contains a number
-that represents _permits_. To access a critical section permits have to be
-obtained, later to be released when the critical section is left.
-
+### A more solid implementation of the producer/consumer problem
 In our producer/consumer code we already protect access to the queue (our shared
-resource) using a `Ref`. But we can use semaphores on top of that to signal
-whether there are elements in the queue or not. This can be done by keeping in
-the semaphore a counter of `filled` buckets, which will be increased when adding
-elements to the queue, and decreased when elements are removed. Consumer code
-will be changed so it blocks when there are no elements to be retrieved
-(`filled` has zero permits).
+resource) using a `Ref`. Now, instead of using `Option` to represent elements
+retrieved from a possibly empty queue, we should instead block the caller
+somehow if queue is empty until some element can be returned. This will be done
+by creating and keeping instances of `Deferred`. A `Deferred[F, A]` instance can
+hold one single element of some type `A`. `Deferred` instances are created
+empty, and can be filled only once. If some fiber tries to read the element from
+an empty `Deferred` then it will be blocked until some other fiber fills
+(completes) it.
 
-So now our producer and consumer look like this:
+Thus, alongside the queue of produced but not yet consumed elements, we have to
+keep track of the `Deferred` instances created when the queue was empty and
+waiting for elements to be available. This instances will be kept in a new queue
+`takers`. We will keep both queues in a new type `State`:
 
 ```scala
-import cats.effect.concurrent.{Ref, Semaphore}
-import cats.effect._
-import cats.syntax.all._
+import cats.effect.concurrent.Deferred
 import scala.collection.immutable.Queue
-
-def producer[F[_]: Sync: ContextShift](id: Int, queueR: Ref[F, Queue[Int]], counterR: Ref[F, Int], filled: Semaphore[F]): F[Unit] =
-  (for {
-    i <- counterR.getAndUpdate(_ + 1)
-    _ <- queueR.getAndUpdate(_.enqueue(i))
-    _ <- filled.release // Signal new item in queue
-    _ <- if(i % 10000 == 0) Sync[F].delay(println(s"Producer $id has reached $i items")) else Sync[F].unit
-    _ <- ContextShift[F].shift
-  } yield ()) >> producer(id, queueR, counterR, filled)
-
-def consumer[F[_]: Sync: ContextShift](id: Int, queueR: Ref[F, Queue[Int]], filled: Semaphore[F]): F[Unit] =
-  (for {
-    _ <- filled.acquire // Wait for some item in queue
-    i <- queueR.modify(_.dequeue.swap)
-    _ <- if(i % 10000 == 0) Sync[F].delay(println(s"Consumer $id has reached $i items")) else Sync[F].unit
-    _ <- ContextShift[F].shift
-  } yield ()) >> consumer(id, queueR, filled)
+case class State[F[_], A](queue: Queue[A], takers: Queue[Deferred[F,A]])
 ```
 
-Note how the producer uses `filled.release` to signal that a new item is
-available in the queue by increasing the number of permits in the semaphore.
-Likewise, consumer uses `filled.acquire` which block if `filled` is zero (no
-elements in queue). If it is not zero (or as soon as it becomes > 0) the call is
-unblocked and the number of permits in the semaphore is decreased. Now our consumer
-is not concerned about trying to read from an empty queue. If it got a 'permit'
-from the semaphore it means the queue will have an element the consumer can
-read.
+Both producer and consumer will access the same shared state instance, which
+will be carried and safely modified by an instance of `Ref`. Consumer shall:
+1. If `queue` is not empty, it will extract and return its head. The new state
+   will keep the tail of the queue, and need not modify `takers`.
+2. If `queue` is empty it will instantiate a new `taker`, add it to the
+   `takers` queue, and 'block' the caller by invoking `taker.get`
 
-Finally we modify our main program so it instantiates the counter and queue
-references, alongside with the semaphore. Also it will create several consumers
-and producers, 10 of each, and will start all of them in parallel:
+Assuming that in our setting we produce and consume `Int`s (just as before),
+then new consumer code will then be:
 
 ```scala
-import cats.effect.concurrent.{Ref, Semaphore}
+import cats.effect.{ContextShift, Sync}
+import cats.effect.concurrent.{Deferred, Ref}
+import scala.collection.immutable.Queue
+
+case class State[F[_], A](queue: Queue[A], takers: Queue[Deferred[F,A]])
+
+def consumer[F[_]: Concurrent: ContextShift](id: Int, stateR: Ref[F, State[F, Int]]): F[Unit] = {
+
+  val take: F[Int] =
+    Deferred[F, Int].flatMap { taker =>
+      stateR.modify {
+        case State(queue, takers) if queue.nonEmpty =>
+          val (i, rest) = queue.dequeue
+          State(rest, takers) -> Sync[F].pure(i)
+        case State(queue, takers) =>
+          State(queue, takers.enqueue(taker)) -> taker.get
+      }.flatten
+    }
+
+  (for {
+    i <- take
+    _ <- if(i % 10000 == 0) Sync[F].delay(println(s"Consumer $id has reached $i items")) else Sync[F].unit
+    _ <- ContextShift[F].shift
+  } yield ()) >> consumer(id, stateR)
+}
+```
+
+The `id` parameter is only used to identify the consumer in console logs (recall
+we will have now several producers and consumers running in parallel). The
+`take` instance implements the checking and updating of the state in `stateR`.
+Note how it will block on `taker.get` when the queue is empty.
+
+The producer, for its part, will:
+1. If there are waiting `takers`, it will take the first in the queue and offer
+   it the newly produced element (`taker.complete`).
+2. If no `takers` are present, it will just enqueue the produced element.
+
+Thus the producer will look like:
+
+```scala
+import cats.effect.{ContextShift, Sync}
+import cats.effect.concurrent.{Deferred, Ref}
+import scala.collection.immutable.Queue
+
+case class State[F[_], A](queue: Queue[A], takers: Queue[Deferred[F,A]])
+
+def producer[F[_]: Sync: ContextShift](id: Int, counterR: Ref[F, Int], stateR: Ref[F, State[F,Int]]): F[Unit] = {
+
+  def offer(i: Int): F[Unit] =
+    stateR.modify {
+      case State(queue, takers) if takers.nonEmpty =>
+        val (taker, rest) = takers.dequeue
+        State(queue, rest) -> taker.complete(i).void
+      case State(queue, takers) =>
+        State(queue.enqueue(i), takers) -> Sync[F].unit
+    }.flatten
+
+  (for {
+    i <- counterR.getAndUpdate(_ + 1)
+    _ <- offer(i)
+    _ <- if(i % 10000 == 0) Sync[F].delay(println(s"Producer $id has reached $i items")) else Sync[F].unit
+    _ <- ContextShift[F].shift
+  } yield ()) >> producer(id, counterR, stateR)
+}
+```
+
+Finally we modify our main program so it instantiates the counter and state
+`Ref`s. Also it will create several consumers and producers, 10 of each, and
+will start all of them in parallel:
+
+```scala
+import cats.effect.concurrent.{Ref, Deferred}
 import cats.effect._
 import cats.instances.list._
 import cats.syntax.all._
@@ -834,17 +883,22 @@ import scala.collection.immutable.Queue
 
 object ProducerConsumer extends IOApp {
 
-  def producer[F[_]: Sync: ContextShift](id: Int, queueR: Ref[F, Queue[Int]], counterR: Ref[F, Int], filled: Semaphore[F]): F[Unit] = ??? // As defined before
+  case class State[F[_], A](queue: Queue[A], takers: Queue[Deferred[F,A]])
 
-  def consumer[F[_]: Sync: ContextShift](id: Int, queueR: Ref[F, Queue[Int]], filled: Semaphore[F]): F[Unit] = ??? // As defined before
+  object State {
+    def empty[F[_], A]: State[F, A] = State(Queue.empty, Queue.empty)
+  }
+
+  def producer[F[_]: Sync: ContextShift](id: Int, counterR: Ref[F, Int], stateR: Ref[F, State[F,Int]]): F[Unit] = ??? // As defined before
+
+  def consumer[F[_]: Concurrent: ContextShift](id: Int, stateR: Ref[F, State[F, Int]]): F[Unit] = ??? // As defined before
 
   override def run(args: List[String]): IO[ExitCode] =
     for {
-      queueR <- Ref.of[IO, Queue[Int]](Queue.empty[Int])
+      stateR <- Ref.of[IO, State[IO,Int]](State.empty[IO, Int])
       counterR <- Ref.of[IO, Int](1)
-      filled <- Semaphore[IO](0)
-      producers = List.range(1, 11).map(producer(_, queueR, counterR, filled)) // 10 producers
-      consumers = List.range(1, 11).map(consumer(_, queueR, filled))           // 10 consumers
+      producers = List.range(1, 11).map(producer(_, counterR, stateR)) // 10 producers
+      consumers = List.range(1, 11).map(consumer(_, stateR))           // 10 consumers
       res <- (producers ++ consumers)
         .parSequence.as(ExitCode.Success) // Run producers and consumers in parallel until done (likely by user cancelling with CTRL-C)
         .handleErrorWith { t =>
@@ -854,8 +908,9 @@ object ProducerConsumer extends IOApp {
 }
 ```
 
-The full implementation of this producer consumer with unbounded queue is available
-[here](https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catseffecttutorial/producerconsumer/ProducerConsumer.scala).
+The full implementation of this producer consumer with unbounded queue is
+available
+[here](https://github.com/lrodero/cats-effect-tutorial/blob/queue_using_Ref_and_Defer/src/main/scala/catseffecttutorial/producerconsumer/ProducerConsumer.scala).
 
 Producers and consumers are created as two list of `IO` instances. All of them
 are started in their own fiber by the call to `parSequence`, which will wait for
@@ -865,70 +920,156 @@ previous example it shall run forever until the user presses CTRL-C.
 Having several consumers and producers improves the balance between consumers
 and producers... but still, on the long run, queue tends to grow in size. To
 fix this we will ensure the size of the queue is bounded, so whenever that max
-size is reached producers will block as they consumers do when the queue is
-empty.
+size is reached producers will block as consumers do when the queue is empty.
 
 ### Producer consumer with bounded queue
-We will use another semaphore `empty` to represent the amount of empty 'buckets'
-in the queue. It will mirror the behavior of `filled`. When a new item is
-enqueued a call to `empty.release` will signal that there is a new empty bucket
-in the queue. Likewise, the producers will request an empty bucket by calling
-`empty.acquire` prior to add new elements, blocking when `empty` number of
-permits is zero.
-
-Producer and consumer code now becomes:
+Having a bounded queue implies that producers, when queue is full, will wait (be
+'blocked') until there is some empty bucket available to be filled. So an
+implementation needs to keep track of these waiting producers. To do so we will
+add a new queue `offerers` that will be added to the `State` alongside `takers`.
+For each waiting producer the `offerers` queue will keep a `Deferred[F, Unit]`
+that will be used to block the producer until the element it offers can be added
+to `queue` or directly passed to some consumer. Alongside the `Deferred`
+instance we need to keep as well the actual element offered by the producer in
+the `offerers` queue. Thus `State` class now becomes:
 
 ```scala
-import cats.effect.concurrent.{Ref, Semaphore}
-import cats.effect._
-import cats.syntax.all._
+import cats.effect.concurrent.Deferred
 import scala.collection.immutable.Queue
 
-def producer[F[_]: Sync: ContextShift](id: Int, queueR: Ref[F, Queue[Int]], counterR: Ref[F, Int], empty: Semaphore[F], filled: Semaphore[F]): F[Unit] =
-  (for {
-    i <- counterR.getAndUpdate(_ + 1)
-    _ <- empty.acquire  // Wait for some bucket free in queue
-    _ <- queueR.getAndUpdate(_.enqueue(i))
-    _ <- filled.release // Signal new item in queue
-    _ <- if(i % 10000 == 0) Sync[F].delay(println(s"Producer $id has reached $i items")) else Sync[F].unit
-    _ <- ContextShift[F].shift
-  } yield ()) >> producer(id, queueR, counterR, empty, filled)
-
-def consumer[F[_]: Sync: ContextShift](id: Int, queueR: Ref[F, Queue[Int]], empty: Semaphore[F], filled: Semaphore[F]): F[Unit] =
-  (for {
-    _ <- filled.acquire // Wait for some item in queue
-    i <- queueR.modify(_.dequeue.swap)
-    _ <- empty.release  // Signal new bucket free in queue
-    _ <- if(i % 10000 == 0) Sync[F].delay(println(s"Consumer $id has reached $i items")) else Sync[F].unit
-    _ <- ContextShift[F].shift
-  } yield ()) >> consumer(id, queueR, empty, filled)
+case class State[F[_], A](queue: Queue[A], capacity: Int, takers: Queue[Deferred[F,A]], offerers: Queue[(A, Deferred[F,Unit])])
 ```
 
-The main program is almost the same, we only add the creation of the `empty`
-semaphore setting as value the max size of the queue. So for a max size of `100`
-we would have:
+Of course both consumer and producer have to be modified to handle this new
+queue `offerers`. A consumer can find four escenarios, depending on if `queue`
+and `offerers` are each one empty or not. For each escenario a consumer shall:
+1. If `queue` is not empty:
+  1.1 If `offerers` is empty then it will extract and return `queue`'s head.
+  1.2 If `offerers` is not empty (there is some producer waiting) then things
+      are more complicated. The `queue` head will be returned to the consumer.
+      Now we have a free bucket available in `queue`. So the first waiting
+      offerer can be retrieved from `offerers`. The element it produced will be
+      added to `queue`, and the `Deferred` instance will be completed so the
+      producer is released (unblocked).
+2. If `queue` is empty:
+  2.1 If `offerers` is empty then there is nothing we can give to the caller,
+      so a new `taker` is created and added to `takers` while caller is
+      blocked with `taker.get`.
+  2.2 If `offerers` is not empty then the first offerer in queue is extracted,
+      its `Deferred` instance released while the offered element is returned to
+      the caller.
+
+So consumer code looks like this:
 
 ```scala
-import cats.effect.concurrent.{Ref, Semaphore}
-import cats.effect._
+import cats.effect.{ContextShift, Sync}
+import cats.effect.concurrent.{Deferred, Ref}
+import scala.collection.immutable.Queue
+
+case class State[F[_], A](queue: Queue[A], capacity: Int, takers: Queue[Deferred[F,A]], offerers: Queue[(A, Deferred[F,Unit])])
+
+def consumer[F[_]: Concurrent: ContextShift](id: Int, stateR: Ref[F, State[F, Int]]): F[Unit] = {
+
+  val take: F[Int] =
+    Deferred[F, Int].flatMap { taker =>
+      stateR.modify {
+        case State(queue, capacity, takers, offerers) if queue.nonEmpty && offerers.isEmpty =>
+          val (i, rest) = queue.dequeue
+          State(rest, capacity, takers, offerers) -> Sync[F].pure(i)
+        case State(queue, capacity, takers, offerers) if queue.nonEmpty =>
+          val (i, rest) = queue.dequeue
+          val ((move, release), tail) = offerers.dequeue
+          State(rest.enqueue(move), capacity, takers, tail) -> release.complete(()).as(i)
+        case State(queue, capacity, takers, offerers) if offerers.nonEmpty =>
+          val ((i, release), rest) = offerers.dequeue
+          State(queue, capacity, takers, rest) -> release.complete(()).as(i)
+        case State(queue, capacity, takers, offerers) =>
+          State(queue, capacity, takers.enqueue(taker), offerers) -> taker.get
+      }.flatten
+    }
+
+  (for {
+    i <- take
+    _ <- if(i % 10000 == 0) Sync[F].delay(println(s"Consumer $id has reached $i items")) else Sync[F].unit
+    _ <- ContextShift[F].shift
+  } yield ()) >> consumer(id, stateR)
+}
+```
+
+Producer functionality is a bit easier:
+1. If there is any waiting `taker` then the produced element will be passed to
+   it releasing the blocked fiber.
+2. If there is no waiting `taker` but `queue` is not empty, then offered element
+   will be enqueued there.
+3. If there is no waiting `taker` and `queue` is already full then a new
+   `offerer` is created, blocking the producer fiber on the `.get` method of the
+   `Deferred` instance.
+
+Now producer code looks like this:
+
+```scala
+import cats.effect.{ContextShift, Sync}
+import cats.effect.concurrent.{Deferred, Ref}
+import scala.collection.immutable.Queue
+
+case class State[F[_], A](queue: Queue[A], capacity: Int, takers: Queue[Deferred[F,A]], offerers: Queue[(A, Deferred[F,Unit])])
+
+def producer[F[_]: Concurrent: ContextShift](id: Int, counterR: Ref[F, Int], stateR: Ref[F, State[F,Int]]): F[Unit] = {
+
+  def offer(i: Int): F[Unit] =
+    Deferred[F, Unit].flatMap[Unit]{ offerer =>
+      stateR.modify {
+        case State(queue, capacity, takers, offerers) if takers.nonEmpty =>
+          val (taker, rest) = takers.dequeue
+          State(queue, capacity, rest, offerers) -> taker.complete(i).void
+        case State(queue, capacity, takers, offerers) if queue.size < capacity =>
+          State(queue.enqueue(i), capacity, takers, offerers) -> Sync[F].unit
+        case State(queue, capacity, takers, offerers) =>
+          State(queue, capacity, takers, offerers.enqueue(i -> offerer)) -> offerer.get
+      }.flatten
+    }
+
+  (for {
+    i <- counterR.getAndUpdate(_ + 1)
+    _ <- offer(i)
+    _ <- if(i % 10000 == 0) Sync[F].delay(println(s"Producer $id has reached $i items")) else Sync[F].unit
+    _ <- ContextShift[F].shift
+  } yield ()) >> producer(id, counterR, stateR)
+}
+```
+
+As you see, producer and consumer are coded around the idea of keeping and
+modifying state, just as with unbounded queues.
+
+As the final step we must adapt the main program to use these new consumers and
+producers, so if we limit the queue size to 100 then we have:
+
+```scala
+import cats.effect.concurrent.{Deferred, Ref}
+import cats.effect.{Concurrent, ContextShift, ExitCode, IO, IOApp, Sync}
 import cats.instances.list._
 import cats.syntax.all._
+
 import scala.collection.immutable.Queue
 
 object ProducerConsumerBounded extends IOApp {
 
-  def producer[F[_]: Sync: ContextShift](id: Int, queueR: Ref[F, Queue[Int]], counterR: Ref[F, Int], empty: Semaphore[F], filled: Semaphore[F]): F[Unit] = ??? // As defined before
+  case class State[F[_], A](queue: Queue[A], capacity: Int, takers: Queue[Deferred[F,A]], offerers: Queue[(A, Deferred[F,Unit])])
 
-  def consumer[F[_]: Sync: ContextShift](id: Int, queueR: Ref[F, Queue[Int]], empty: Semaphore[F], filled: Semaphore[F]): F[Unit] = ??? // As defined before
+  object State {
+    def empty[F[_], A](capacity: Int): State[F, A] = State(Queue.empty, capacity, Queue.empty, Queue.empty)
+  }
+
+  def producer[F[_]: Concurrent: ContextShift](id: Int, counterR: Ref[F, Int], stateR: Ref[F, State[F,Int]]): F[Unit] = ??? // As defined before
+
+  def consumer[F[_]: Concurrent: ContextShift](id: Int, stateR: Ref[F, State[F, Int]]): F[Unit] = ??? // As defined before
 
   override def run(args: List[String]): IO[ExitCode] =
     for {
-      queueR <- Ref.of[IO, Queue[Int]](Queue.empty[Int])
+      stateR <- Ref.of[IO, State[IO, Int]](State.empty[IO, Int](capacity = 100))
       counterR <- Ref.of[IO, Int](1)
-      empty <- Semaphore[IO](100)
-      filled <- Semaphore[IO](0)
-      producers = List.range(1, 11).map(producer(_, queueR, counterR, empty, filled)) // 10 producers
-      consumers = List.range(1, 11).map(consumer(_, queueR, empty, filled))           // 10 consumers
+      producers = List.range(1, 11).map(producer(_, counterR, stateR)) // 10 producers
+      consumers = List.range(1, 11).map(consumer(_, stateR))           // 10 consumers
       res <- (producers ++ consumers)
         .parSequence.as(ExitCode.Success) // Run producers and consumers in parallel until done (likely by user cancelling with CTRL-C)
         .handleErrorWith { t =>
@@ -938,49 +1079,101 @@ object ProducerConsumerBounded extends IOApp {
 }
 ```
 
-The full implementation of this producer consumer with bounded queue is available
-[here](https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catseffecttutorial/producerconsumer/ProducerConsumerBounded.scala).
+The full implementation of this producer consumer with bounded queue is
+available
+[here](https://github.com/lrodero/cats-effect-tutorial/blob/queue_using_Ref_and_Defer/src/main/scala/catseffecttutorial/producerconsumer/ProducerConsumerBounded.scala).
 
-### On cancellation of producer and consumers
-In our producers/consumers code we have not dealt yet with cancellation. Truth
-is the only cancellation that can happen in those small programs is caused by
-the user 'killing' the main program, and in that case we are not much concerned
-about the consequences (the program has terminated after all). But in more
-complex settings we have to be careful as consumers and producers fibers can be
-cancelled at any time. And which will then be the consequences? Well, basically
-we would not be able to trust our semaphores to represent the amount of items
-and free buckets in the queue. See for example the code of a consumer in our
-bounded queue setting. It must make sure that whenever a `filled` permit is
-acquired then a) a new element is added and b) `empty.release` is called. A
-cancellation right before those actions will leave the semaphores with values
-that do not represent the internal state of the queue.
-
-To prevent this we must make sure that a call to a producer and a consumer is
-fully run without being cancelled. This can be done with `Sync[F].uncancelable`,
-which ensures that the `F` instance passed as parameter cannot be cancelled. So,
-for example, our consumer in the bounded queue example will look like:
+### Taking care of cancellation
+We shall ask ourselves, is this implementation cancellation-safe? That is, what
+happens if the fiber running a consumer or a producer gets cancelled? Does state
+become inconsistent? Let's focus on `offer` first. For the sake of clarity in our
+analysis let's reformat the code using a for-comprehension:
 
 ```scala
-import cats.effect.concurrent.{Ref, Semaphore}
-import cats.effect.{ContextShift, ExitCode, IO, IOApp, Sync}
-import cats.syntax.all._
-import scala.collection.immutable.Queue
-
-def consumer[F[_]: Sync: ContextShift](id: Int, queueR: Ref[F, Queue[Int]], empty: Semaphore[F], filled: Semaphore[F]): F[Unit] =
-  Sync[F].uncancelable(
-    for {
-      _ <- filled.acquire // Wait for some item in queue
-      i <- queueR.modify(_.dequeue.swap)
-      _ <- empty.release
-      _ <- if(i % 10000 == 0) Sync[F].delay(println(s"Consumer $id has reached $i items")) else Sync[F].unit
-      _ <- ContextShift[F].shift
-    } yield ()
-  ) >> consumer(id, queueR, empty, filled)
+def offer(i: Int): F[Unit] =
+  for {
+    offerer <- Deferred[F, Int]
+    op      <- stateR.modify {...} // It returns an F[] that must be run!
+    _       <- op
+  } yield ()
 ```
 
-Making the `producer` function uncancelable is similar, we leave that as a small
-exercise.
+So far so good. Now, cancellation steps into action in each `.flatMap` in `F`,
+that is, in each step of our for-comprehension. If the fiber gets canceled right
+before or after the first step, well, that is not an issue. The `offerer` will
+be eventually garbage collected, that's all. But what if the cancellation
+happens right after the call to `modify`? Well, that `op` will not be run. 
 
+
+
+HERE
+HERE
+HERE
+HERE
+HERE
+HERE
+HERE
+HERE
+HERE
+HERE
+HERE
+HERE
+HERE
+
+
+### Why not using semaphores in the producer-consumer problem?
+The producer-consumer problem is far from new in concurrent programming.
+_Semaphores_ are a classical tool used for this problem. As discussed in the
+first section of this tutorial, semaphores are used to control access to
+critical sections of our code that handle shared resources, when those sections
+can be run concurrently. Each semaphore contains a number that represents
+_permits_. To access a critical section permits have to be obtained, later to be
+released when the critical section is left.
+
+However, in cats-effect (at least until 3.0 is released), semaphores are _not_ a
+good fit for the producer-consumer problem. Why is that? Well, semaphores would
+be used to keep count of the number of produced elements available to be
+consumed.  Consumers would ask for permits to retrieve those elements, while
+producers will increase the number of permits to after adding new elements. So,
+a bare bones consumer can look something like:
+
+```scala
+for {
+    _ <- filled.acquire // Wait for some item in queue by acquiring a permit
+    i <- queueR.modify(_.dequeue.swap) // Retrieving element
+    _ <- consume(e)
+} yield(())
+``` 
+
+Where `queueR` is a `Ref` that wraps a `Queue` of elements, and `filled` is our
+instance of `Semaphore` counting the elements in the queue. Conversely the producer
+implementation will increase the semaphore after adding a new element.
+
+And what is wrong with that code? Well, nothing by itself, but we have to take
+_cancellation_ into account. It is possible that the consumer is canceled just
+after getting a permit but before extracting the element from the queue. In that
+case the semaphore will not be a proper representation of the number of elements
+in the queue.
+
+But wait! Alternatively, if the consumer is an `IO` instance,  we can try to
+make its code 'uncancelable'. Our producer then becomes:
+```scala
+IO.uncancelable {
+  for {
+    _ <- filled.acquire // Wait for some item in queue by acquiring a permit
+    e <- queueR.modify(_.dequeue.swap) // Retrieving element
+    _ <- consume(e)
+  } yield(())
+}
+``` 
+
+Unfortunately there is a new problem here: now we cannot cancel our consumer! So
+it will be 'stuck' forever if no elements are added to the queue. For example,
+the handy `IO.timeout` method will _not_ work as it tries to cancel the `IO`
+instance it is invoked upon, which is not possible if we make the `IO`
+uncancelable. The `uncancelable` method in cats-effect 3 will introduce a
+different signature to circunvent this problem. But in cats-effect 2 this is not
+solvable.
 
 ### Exercise: build a concurrent queue
 A _concurrent queue_ is, well, a queue data structure that allows safe
@@ -991,107 +1184,12 @@ embedded in our `producer` and `consumer` functions. To build a concurrent queue
 we only need to extract from those methods the part that handles the concurrent
 access.
 
-A simple concurrent queue with only two methods could be defined as:
-
-```scala
-import cats.effect.{Concurrent, Sync}
-
-trait SimpleConcurrentQueue[F[_], A] {
-  /** Get and remove first element from queue, blocks if queue empty. */
-  def poll: F[A]
-  /** Put element at then end of queue, blocks if queue is bounded and full.*/
-  def put(a: A): F[Unit]
-}
-
-// Exercise: implement builder methods in this companion object
-object SimpleConcurrentQueue {
-  def unbounded[F[_]: Concurrent: Sync, A]: F[SimpleConcurrentQueue[F, A]] = ???
-  def bounded[F[_]: Concurrent: Sync, A](size: Int): F[SimpleConcurrentQueue[F, A]] = ???
-}
-```
-
-The exercise is to implement the missing constructor methods we have included in
-`SimpleConcurrentQueue` companion object. A possible implementation is given
-[here](https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catseffecttutorial/producerconsumer/exerciseconcurrentqueue/SimpleConcurrentQueue.scala) for reference.
-
-Finally, we propose you to write a more complete concurrent queue
-implementation with these definitions:
-
-```scala
-import cats.effect.{Concurrent, Sync}
-
-trait ConcurrentQueue[F[_], A] {
-  /** Get and remove first element from queue, blocks if queue empty. */
-  def poll: F[A]
-  /** Get and remove first `n` elements from queue, blocks if less than `n` items are available in queue.
-   * Error raised if `n < 0` or, in bounded queues, if `n > max size of queue`.*/
-  def pollN(n: Int): F[List[A]]
-  /** Get, but not remove, first element in queue, blocks if queue empty. */
-  def peek: F[A]
-  /** Get, but not remove, first `n` elements in queue, blocks if less than `n` items are available in queue.
-   * Error raised if `n < 0` or, in bounded queues, if `n > max size of queue`.*/
-  def peekN(n: Int): F[List[A]]
-  /** Put element at then end of queue, blocks if queue is bounded and full. */
-  def put(a: A): F[Unit]
-  /** Puts elements at the end of the queue, blocks if queue is bounded and does not have spare size for all items.
-   * Error raised in bounded queues if `as.size > max size of queue`.*/
-  def putN(as: List[A]): F[Unit]
-  /** Try to get and remove first element from queue, immediately returning `F[None]` if queue empty. Non-blocking. */
-  def tryPoll: F[Option[A]]
-  /** Try to get and remove first `n` elements from queue, immediately returning `F[None]` if less than `n` items are available in queue. Non-blocking.
-   * Error raised if n < 0. */
-  def tryPollN(n: Int): F[Option[List[A]]]
-  /** Try to get, but not remove, first element from queue, immediately returning `F[None]` if queue empty. Non-blocking. */
-  def tryPeek: F[Option[A]]
-  /** Try to get, but not remove, first  `n` elements from queue, immediately returning `F[None]` if less than `n` items are available in queue. Non-blocking.
-   * Error raised if n < 0. */
-  def tryPeekN(n: Int): F[Option[List[A]]]
-  /** Try to put element at the end of queue, immediately returning `F[false]` if queue is bounded and full. Non-blocking. */
-  def tryPut(a: A): F[Boolean]
-  /** Try to put elements in list at the end of queue, immediately returning `F[false]` if queue is bounded and does not have spare size for all items. Non-blocking. */
-  def tryPutN(as: List[A]): F[Boolean]
-  /** Returns # of items in queue. Non-blocking. */
-  def size: F[Long]
-  /** Returns `F[true]` if queue empty, `F[false]` otherwise. Non-blocking. */
-  def isEmpty: F[Boolean]
-}
-
-/**
- * Specific methods for bounded concurrent queues.
- */
-trait BoundedConcurrentQueue[F[_], A] extends ConcurrentQueue [F, A] {
-  /** Max queue size. */
-  val maxQueueSize: Int
-  /** Remaining empty buckets. Non-blocking.*/
-  def emptyBuckets: F[Long]
-  /** Returns `F[true]` if queue full, `F[false]` otherwise. Non-blocking. */
-  def isFull: F[Boolean]
-}
-
-// Exercise: implement builder methods in this companion object
-object ConcurrentQueue {
-  def unbounded[F[_]: Concurrent: Sync, A]: F[ConcurrentQueue[F, A]] = ???
-  def bounded[F[_]: Concurrent: Sync, A](size: Int): F[BoundedConcurrentQueue[F, A]] = ???
-}
-```
-
-Note that now bounded concurrent queues have their own type
-`BoundedConcurrentQueue` which extends `ConcurrentQueue` with some functions
-specific to them. As before, you should try to implement the builder methods in
-companion object `ConcurrentQueue`. **TIP**: we have not reviewed all methods
-that cats-effect's `Semaphore` has to offer. Take a look to `Semaphore`
-[API](https://typelevel.org/cats-effect/api/cats/effect/concurrent/Semaphore.html)
-as you will find some new useful methods there.
-
-
 A possible implementation of the concurrent queue is given
-[here](https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catseffecttutorial/producerconsumer/exerciseconcurrentqueue/ConcurrentQueue.scala)
-for reference. **NOTE** this concurrent queue implementation is not intended for
-high-throughput requirements, and it has not been tested in production
-environments.  For a production-ready, high-performance concurrent queue it is
-strongly advised to consider [Monix's concurrent
-queue](https://monix.io/api/current/monix/catnap/ConcurrentQueue.html), which is
-cats-effect compatible.
+[here](https://github.com/lrodero/cats-effect-tutorial/blob/queue_using_Ref_and_Defer/src/main/scala/catseffecttutorial/producerconsumer/exerciseconcurrentqueue/Queue.scala)
+for reference. **NOTE** this concurrent queue implementation is basically the
+same [queue that will be available in cats-effect 3 std
+package](https://github.com/typelevel/cats-effect/blob/series/3.x/std/shared/src/main/scala/cats/effect/std/Queue.scala)
+with minor modifications so it runs on cats-effect 2.
 
 ## Conclusion
 
