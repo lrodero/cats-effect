@@ -45,19 +45,25 @@ same dependencies and compilation options:
 ```scala
 name := "cats-effect-tutorial"
 
-version := "2.2.0"
+version := "3.0.0-M4"
 
-scalaVersion := "2.12.8"
+scalaVersion := "2.13.3"
 
-libraryDependencies += "org.typelevel" %% "cats-effect" % "2.2.0" withSources() withJavadoc()
+libraryDependencies += "org.typelevel" %% "cats-effect" % "3.0.0-M4" withSources() withJavadoc()
 
 scalacOptions ++= Seq(
   "-feature",
   "-deprecation",
   "-unchecked",
   "-language:postfixOps",
-  "-language:higherKinds",
-  "-Ypartial-unification")
+  "-language:higherKinds")
+```
+
+Also make sure that you use a recent version of `sbt`. Set this value in
+`project/build.properties` file:
+
+```scala
+sbt.version=1.4.2
 ```
 
 Code snippets in this tutorial can be pasted and compiled right in the scala
@@ -141,7 +147,8 @@ for-comprehensions as they implement `flatMap`. Note also that when releasing
 resources we must also take care of any possible error during the release
 itself, for example with the `.handleErrorWith` call as we do in the code above.
 In this case we just swallow the error, but normally it should be at least
-logged.
+logged. Often you will see that `.attempt.void` is used to get the same
+'swallow and ignore errors' behavior.
 
 Optionally we could have used `Resource.fromAutoCloseable` to define our
 resources, that method creates `Resource` instances over objects that implement
@@ -321,18 +328,19 @@ called on the same semaphore. It is important to remark that _there is no actual
 thread being really blocked_, the thread that finds the `.acquire` call will be
 immediately recycled by cats-effect. When the `release` method is invoked then
 cats-effect will look for some available thread to resume the execution of the
-code after `.acquire`.
+code after `.acquire`. Because the `IO` instance is not really block, the term
+'_semantically blocked_' is used instead.
 
-We will use a semaphore with a single permit. The `.withPermit` method acquires
-one permit, runs the `IO` given and then releases the permit.  We could also
-use `.acquire` and then `.release` on the semaphore explicitly, but
-`.withPermit` is more idiomatic and ensures that the permit is released even if
-the effect run fails.
+We will use a semaphore with a single permit. The `.permit` method acquires one
+permit as a `Resource` instance that will acquire the single permit, runs the
+`IO` given and then releases the permit. We could also use `.acquire` and then
+`.release` on the semaphore explicitly, but `.permit` is more idiomatic and
+ensures that the permit is released even if the effect run fails.
 
 ```scala
 import cats.syntax.all._
 import cats.effect.{Concurrent, IO, Resource}
-import cats.effect.concurrent.Semaphore
+import cats.effect.std.Semaphore
 import java.io._
 
 // transfer and transmit methods as defined before
@@ -342,8 +350,8 @@ def inputStream(f: File, guard: Semaphore[IO]): Resource[IO, FileInputStream] =
   Resource.make {
     IO(new FileInputStream(f))
   } { inStream => 
-    guard.withPermit {
-     IO(inStream.close()).handleErrorWith(_ => IO.unit)
+    guard.permit.use { _ =>
+      IO(inStream.close()).handleErrorWith(_ => IO.unit)
     }
   }
 
@@ -351,8 +359,8 @@ def outputStream(f: File, guard: Semaphore[IO]): Resource[IO, FileOutputStream] 
   Resource.make {
     IO(new FileOutputStream(f))
   } { outStream =>
-    guard.withPermit {
-     IO(outStream.close()).handleErrorWith(_ => IO.unit)
+    guard.permit.use{ _ =>
+      IO(outStream.close()).handleErrorWith(_ => IO.unit)
     }
   }
 
@@ -362,12 +370,14 @@ def inputOutputStreams(in: File, out: File, guard: Semaphore[IO]): Resource[IO, 
     outStream <- outputStream(out, guard)
   } yield (inStream, outStream)
 
-def copy(origin: File, destination: File)(implicit concurrent: Concurrent[IO]): IO[Long] = {
+def copy(origin: File, destination: File): IO[Long] = {
   for {
     guard <- Semaphore[IO](1)
     count <- inputOutputStreams(origin, destination, guard).use { case (in, out) => 
-               guard.withPermit(transfer(in, out))
-             }
+      guard.permit.use { _ =>
+        transfer(in, out)
+      }
+    }
   } yield count
 }
 ```
@@ -378,9 +388,7 @@ released under any circumstances, whatever the result of `transfer` (success,
 error, or cancellation). As the 'release' parts in the `Resource` instances are
 now blocked on the same semaphore, we can be sure that streams are closed only
 after `transfer` is over, _i.e._ we have implemented mutual exclusion of
-`transfer` execution and resources releasing. An implicit `Concurrent` instance
-is required to create the semaphore instance, which is included in the function
-signature.
+`transfer` execution and resources releasing.
 
 Mark that while the `IO` returned by `copy` is cancelable (because so are `IO`
 instances returned by `Resource.use`), the `IO` returned by `transfer` is not.
@@ -405,10 +413,7 @@ purity in our definitions up to the program main function.
 coding an effectful `main` method we code a pure `run` function. When executing
 the class a `main` method defined in `IOApp` will call the `run` function we
 have coded. Any interruption (like pressing `Ctrl-c`) will be treated as a
-cancellation of the running `IO`. Also `IOApp` provides implicit instances of
-`Timer[IO]` and `ContextShift[IO]` (not discussed yet in this tutorial).
-`ContextShift[IO]` allows for having a `Concurrent[IO]` in scope, as the one
-required by the `copy` function.
+cancellation of the running `IO`.
 
 When coding `IOApp`, instead of a `main` function we have a `run` function,
 which creates the `IO` instance that forms the program. In our case, our `run`
@@ -442,7 +447,7 @@ moment call to `IO.raiseError` to interrupt a sequence of `IO` operations.
 
 #### Copy program code
 You can check the [final version of our copy program
-here](https://github.com/lrodero/cats-effect-tutorial/blob/replace_tcp_section_with_prodcons/src/main/scala/catseffecttutorial/copyfile/CopyFile.scala).
+here](https://github.com/lrodero/cats-effect-tutorial/blob/series/3.x/src/main/scala/catseffecttutorial/copyfile/CopyFile.scala).
 
 The program can be run from `sbt` just by issuing this call:
 
