@@ -1,4 +1,4 @@
---
+---
 layout: docsplus
 title:  "Tutorial"
 position: 2
@@ -59,15 +59,16 @@ scalacOptions ++= Seq(
   "-language:higherKinds")
 ```
 
-Also make sure that you use a recent version of `sbt`. Set this value in
-`project/build.properties` file:
+Also make sure that you use a recent version of `sbt`, at least `1.4.2`. You can
+set the `sbt` version in `project/build.properties` file:
 
 ```scala
 sbt.version=1.4.2
 ```
 
-Code snippets in this tutorial can be pasted and compiled right in the scala
-console of the project defined above (or any project with similar settings).
+Almost all code snippets in this tutorial can be pasted and compiled right in
+the scala console of the project defined above (or any project with similar
+settings).
 
 ## <a name="copyingfiles"></a>Copying files - basic concepts, resource handling and cancellation
 
@@ -339,7 +340,7 @@ ensures that the permit is released even if the effect run fails.
 
 ```scala
 import cats.syntax.all._
-import cats.effect.{Concurrent, IO, Resource}
+import cats.effect.{IO, Resource}
 import cats.effect.std.Semaphore
 import java.io._
 
@@ -471,27 +472,23 @@ WARNING: To properly test cancelation, You should also ensure that
 intercept the cancelation because it will be running the program
 in the same JVM as itself.
 
-TODO: REVIEW LINKS IN THIS PARAGRAPH
+TODO: REVIEW THIS PARAGRAPH
 ### Polymorphic cats-effect code
 There is an important characteristic of `IO` that we shall be aware of. `IO` is
-able to encapsulate side-effects, but the capacity to define concurrent and/or
-async and/or cancelable `IO` instances comes from the existence of a
-`Concurrent[IO]` instance. [`Concurrent`](../typeclasses/concurrent.md) is a
-type class that, for an `F[_]` carrying a side-effect, brings the ability to
-cancel or start concurrently the side-effect in `F`. `Concurrent` also extends
-type class [`Async`](../typeclasses/async.md), that allows to define
-synchronous/asynchronous computations. `Async`, in turn, extends type class
-[`Sync`](../typeclasses/sync.md), which can suspend the execution of side
-effects in `F`.
+able to suspend side-effects asynchronously thanks to the existence of an
+instance of `Async[IO]`. Because `Async` extends `Sync` `IO` can also suspend
+side-effects synchronously. On top of that `Async` extends typeclasses such as
+`MonadCancel`, `Concurrent` or `Temporal`, which bring the possibility to cancel
+an `IO` instance, to run several `IO` instances concurrently, to timeout an
+execution, to force the execution to wait (sleep), etc.
 
-So well, `Sync` can suspend side effects (and so can `Async` and `Concurrent` as
-they extend `Sync`). We have used `IO` so far mostly for that purpose. Now,
-going back to the code we created to copy files, could have we coded its
-functions in terms of some `F[_]: Sync` instead of `IO`? Truth is we could and
-**in fact it is recommendable** in real world programs.  See for example how we
-would define a polymorphic version of our `transfer` function with this
-approach, just by replacing any use of `IO` by calls to the `delay` and `pure`
-methods of the `Sync[F[_]]` instance!
+So well, `Sync` and `Async` can suspend side effects. We have used `IO` so far
+mostly for that purpose. Now, going back to the code we created to copy files,
+could have we coded its functions in terms of some `F[_]: Sync` or `F[_]: Async`
+instead of `IO`?  Truth is we could and **in fact it is recommendable** in real
+world programs.  See for example how we would define a polymorphic version of
+our `transfer` function with this approach, just by replacing any use of `IO` by
+calls to the `delay` and `pure` methods of the `Sync[F[_]]` instance!
 
 ```scala
 import cats.effect.Sync
@@ -510,11 +507,14 @@ We leave as an exercise to code the polymorphic versions of `inputStream`,
 `outputStream`, `inputOutputStreams`, `transfer` and `copy` functions. You will
 find that transformation similar to the one shown for `transfer` in the snippet
 above, only that the last four functions require `F[_]: Async` instead of `F[_]:
-Sync`.
+Sync`. This is because they not only suspend a side-effect, they use
+functionality of semaphores that requires a `MonadError` in (implicit) scope.
+And `Sync` does _not_ extends `MonadError` (nor `MonadCancel`, `Concurrent`,
+etc.) while `Async` does.
 
 ```scala
 import cats.effect._
-import cats.effect.concurrent.Semaphore
+import cats.effect.std.Semaphore
 import cats.syntax.all._
 import java.io._
 
@@ -526,10 +526,9 @@ def inputOutputStreams[F[_]: Async](in: File, out: File, guard: Semaphore[F]): R
 def copy[F[_]: Async](origin: File, destination: File): F[Long] = ???
 ```
 
-Only in our `main` function we will set `IO` as the final `F` for
-our program. To do so, of course, a `Concurrent[IO]` instance must be in scope,
-but that instance is brought transparently by `IOApp` so we do not need to be
-concerned about it.
+Only in our `main` function we will set `IO` as the final `F` for our program.
+To do so, of course, an `Async[IO]` instance must be in scope, but that instance
+is brought transparently by `IOApp` so we do not need to be concerned about it.
 
 During the remaining of this tutorial we will use polymorphic code, only falling
 to `IO` in the `run` method of our `IOApp`s. Polymorphic code is less
@@ -908,7 +907,7 @@ instance we need to keep as well the actual element offered by the producer in
 the `offerers` queue. Thus `State` class now becomes:
 
 ```scala
-import cats.effect.concurrent.Deferred
+import cats.effect.Deferred
 import scala.collection.immutable.Queue
 
 case class State[F[_], A](queue: Queue[A], capacity: Int, takers: Queue[Deferred[F,A]], offerers: Queue[(A, Deferred[F,Unit])])
@@ -918,20 +917,20 @@ Of course both consumer and producer have to be modified to handle this new
 queue `offerers`. A consumer can find four escenarios, depending on if `queue`
 and `offerers` are each one empty or not. For each escenario a consumer shall:
 1. If `queue` is not empty:
-  1.1 If `offerers` is empty then it will extract and return `queue`'s head.
-  1.2 If `offerers` is not empty (there is some producer waiting) then things
-      are more complicated. The `queue` head will be returned to the consumer.
-      Now we have a free bucket available in `queue`. So the first waiting
-      offerer can be retrieved from `offerers`. The element it produced will be
-      added to `queue`, and the `Deferred` instance will be completed so the
-      producer is released (unblocked).
+    1. If `offerers` is empty then it will extract and return `queue`'s head.
+    2. If `offerers` is not empty (there is some producer waiting) then things
+       are more complicated. The `queue` head will be returned to the consumer.
+       Now we have a free bucket available in `queue`. So the first waiting
+       offerer can be retrieved from `offerers`. The element it produced will be
+       added to `queue`, and the `Deferred` instance will be completed so the
+       producer is released (unblocked).
 2. If `queue` is empty:
-  2.1 If `offerers` is empty then there is nothing we can give to the caller,
-      so a new `taker` is created and added to `takers` while caller is
-      blocked with `taker.get`.
-  2.2 If `offerers` is not empty then the first offerer in queue is extracted,
-      its `Deferred` instance released while the offered element is returned to
-      the caller.
+    1. If `offerers` is empty then there is nothing we can give to the caller,
+       so a new `taker` is created and added to `takers` while caller is
+       blocked with `taker.get`.
+    2. If `offerers` is not empty then the first offerer in queue is extracted,
+       its `Deferred` instance released while the offered element is returned to
+       the caller.
 
 So consumer code looks like this:
 
