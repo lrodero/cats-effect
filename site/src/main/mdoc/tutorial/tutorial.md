@@ -316,8 +316,8 @@ our case, that would close both streams. So far so good! But what happens if
 cancellation happens _while_ the streams are being used? This could lead to data
 corruption as a stream where some thread is writing to is at the same time being
 closed by another thread. For more info about this problem see
-[Gotcha: Cancellation is a concurrent action](../datatypes/io.md#gotcha-cancellation-is-a-concurrent-action)
-in cats-effect site.
+[Gotcha: Cancellation is a concurrent
+action](../datatypes/io.md#gotcha-cancellation-is-a-concurrent-action).
 
 To prevent such data corruption we must use some concurrency control mechanism
 that ensures that no stream will be closed while the `IO` returned by `transfer`
@@ -329,9 +329,8 @@ called on the same semaphore. It is important to remark that _there is no actual
 thread being really blocked_, the thread that finds the `.acquire` call will be
 immediately recycled by cats-effect. When the `release` method is invoked then
 cats-effect will look for some available thread to resume the execution of the
-code after `.acquire`. Because the `IO` instance is not really blocked, the term
-'_semantically blocked_' is used instead.
-
+code after `.acquire`.
+ 
 We will use a semaphore with a single permit. The `.permit` method acquires one
 permit as a `Resource` instance that will acquire the single permit, runs the
 `IO` given and then releases the permit. We could also use `.acquire` and then
@@ -472,11 +471,10 @@ WARNING: To properly test cancelation, You should also ensure that
 intercept the cancelation because it will be running the program
 in the same JVM as itself.
 
-TODO: REVIEW THIS PARAGRAPH
 ### Polymorphic cats-effect code
 There is an important characteristic of `IO` that we shall be aware of. `IO` is
 able to suspend side-effects asynchronously thanks to the existence of an
-instance of `Async[IO]`. Because `Async` extends `Sync` `IO` can also suspend
+instance of `Async[IO]`. Because `Async` extends `Sync`, `IO` can also suspend
 side-effects synchronously. On top of that `Async` extends typeclasses such as
 `MonadCancel`, `Concurrent` or `Temporal`, which bring the possibility to cancel
 an `IO` instance, to run several `IO` instances concurrently, to timeout an
@@ -484,11 +482,11 @@ execution, to force the execution to wait (sleep), etc.
 
 So well, `Sync` and `Async` can suspend side effects. We have used `IO` so far
 mostly for that purpose. Now, going back to the code we created to copy files,
-could have we coded its functions in terms of some `F[_]: Sync` or `F[_]: Async`
-instead of `IO`?  Truth is we could and **in fact it is recommendable** in real
-world programs.  See for example how we would define a polymorphic version of
-our `transfer` function with this approach, just by replacing any use of `IO` by
-calls to the `delay` and `pure` methods of the `Sync[F[_]]` instance!
+could have we coded its functions in terms of some `F[_]: Sync` and `F[_]:
+Async` instead of `IO`?  Truth is we could and **in fact it is recommendable**
+in real world programs.  See for example how we would define a polymorphic
+version of our `transfer` function with this approach, just by replacing any use
+of `IO` by calls to the `delay` and `pure` methods of the `Sync[F]` instance:
 
 ```scala
 import cats.effect.Sync
@@ -570,11 +568,10 @@ corruption. Also only one reader can extract data from the queue so no two
 readers get the same data item.
 
 Variations of this problem exists depending on whether there are more than one
-consumer/producer, or whether the data structure siting between them is
-size-bounded or not. Unless stated otherwise, the solutions discussed here are
-suited for multi consumer and multi reader settings. Initially the solutions
-will assume an unbounded data structure, to then present a solution for a
-bounded one.
+consumer/producer, or whether the data structure sitting between them is
+size-bounded or not. The solutions discussed here are suited for multi consumer
+and multi reader settings. Initially the solutions will assume an unbounded data
+structure, to then present a solution for a bounded one.
 
 But before we work on the solution for this problem we must introduce _fibers_,
 which are the basic building block of cats-effect concurrency.
@@ -587,27 +584,28 @@ does not guarantee that the action described in the `F` associated to it will be
 run if there is a shortage of threads. Internally cats-effect uses thread pools
 to run fibers when running on the JVM. So if there is no thread available in the
 pool then the fiber execution will 'wait' until some thread is free again. On
-the other hand fibers are, unlike threads, very cheap entities. We can spawn
-millions of them at ease without impacting the performance.
+the other hand when the execution of some fiber is blocked _e.g._ because it
+must wait for a semaphore to be released, the thread running the fiber is
+recycled by cats-effect so it is available for other fibers. When the fiber
+execution can be resumed cats-effect will look for some free thread to continue
+the execution. The term "_semantically blocked_" is used sometimes to denote
+that blocking the fiber does not involve halting any thread. Cats-effect also
+recycles threads of finished and canceled fibers.  But keep in mind that, in
+contrast, if the fiber is truly blocked by some external action like waiting for
+some input from a TCP socket, then cats-effect has no way to recover back that
+thread until the action finishes. Such calls should be wrapped by `IO.blocking`
+to signal that the wrapped code will block the thread.  Cats-effect uses that
+hint to optimize `IO` scheduling.
 
-TODO: REVIEW LINKS OF Deferred, Ref and Semaphore
+Another difference with threads is that fibers are very cheap entities. We can
+spawn millions of them at ease without impacting the performance. 
+
 Cats-effect implements some concurrency primitives to coordinate concurrent
 fibers: [Deferred](../concurrency/deferred.md),
 [Ref](../concurrency/ref.md) and
 [Semaphore](../concurrency/semaphore.md)
-(semaphores we already discussed in the first part of this tutorial). It is
-important to understand that, when a fiber gets semantically blocked by some
-concurrent data structure, cats-effect recycles the thread so it becomes
-available for other fibers. Cats-effect also recovers threads of finished and
-cancelled fibers.  But keep in mind that, in contrast, if the fiber is truly
-blocked by some external action like waiting for some input from a TCP socket,
-then cats-effect has no way to recover back that thread until the action
-finishes. Such calls should be wrapped by `IO.blocking` to signal that the
-wrapped code will block the thread. Cats-effect uses that hint to optimize
-`IO` scheduling.
+(semaphores we already discussed in the first part of this tutorial).
 
-
-TODO: REPLACE THIS PARAGRAPH WITH LINK TO 'schedulers.md'.
 Way more detailed info about concurrency in cats-effect can be found in [this
 other tutorial 'Concurrency in Scala with
 Cats-Effect'](https://github.com/slouc/concurrency-in-scala-with-ce). It is also
@@ -736,7 +734,6 @@ hint it, nor it will return. In contrast `parMapN` does promote the error it
 finds to the caller. _In general, if possible, programmers should prefer to use
 higher level commands such as `parMapN` or `parSequence` to deal with fibers_.
 
-TODO: REVIEW LINK TO Deferred
 Ok, we stick to our implementation based on `.parMapN`. Are we done? Does it
 Work? Well, it works... but it is far from ideal. If we run it we will find that
 the producer runs faster than the consumer so the queue is constantly growing.
@@ -749,7 +746,7 @@ producers to balance production and consumption rate.
 ### A more solid implementation of the producer/consumer problem
 In our producer/consumer code we already protect access to the queue (our shared
 resource) using a `Ref`. Now, instead of using `Option` to represent elements
-retrieved from a possibly empty queue, we should instead block the caller
+retrieved from a possibly empty queue, we should instead block the caller fiber
 somehow if queue is empty until some element can be returned. This will be done
 by creating and keeping instances of `Deferred`. A `Deferred[F, A]` instance can
 hold one single element of some type `A`. `Deferred` instances are created
@@ -902,9 +899,9 @@ implementation needs to keep track of these waiting producers. To do so we will
 add a new queue `offerers` that will be added to the `State` alongside `takers`.
 For each waiting producer the `offerers` queue will keep a `Deferred[F, Unit]`
 that will be used to block the producer until the element it offers can be added
-to `queue` or directly passed to some consumer. Alongside the `Deferred`
-instance we need to keep as well the actual element offered by the producer in
-the `offerers` queue. Thus `State` class now becomes:
+to `queue` or directly passed to some consumer (`taker`). Alongside the
+`Deferred` instance we need to keep as well the actual element offered by the
+producer in the `offerers` queue. Thus `State` class now becomes:
 
 ```scala
 import cats.effect.Deferred
@@ -1054,7 +1051,7 @@ available
 
 ### Taking care of cancellation
 We shall ask ourselves, is this implementation cancellation-safe? That is, what
-happens if the fiber running a consumer or a producer gets cancelled? Does state
+happens if the fiber running a consumer or a producer gets canceled? Does state
 become inconsistent? Let's check `producer` first. State is handled by its
 internal `offer`, so we will focus on it. And, for the sake of clarity in our
 analysis let's reformat the code using a for-comprehension:
@@ -1146,7 +1143,7 @@ def producer[F[_]: Async](id: Int, counterR: Ref[F, Int], stateR: Ref[F, State[F
 The consumer part must deal with cancellation in the same way. It will use
 `poll` to enable cancellation on the blocking calls, but at the same time it
 will make sure to clean up the state when a cancellation occurs. In this case,
-the blocking call is `taker.get`, when such call is cancelled the `taker` will
+the blocking call is `taker.get`, when such call is canceled the `taker` will
 be removed from the list of takers in the state. So our `consumer` is now:
 
 ```scala
@@ -1197,19 +1194,20 @@ available
 A _concurrent queue_ is, well, a queue data structure that allows safe
 concurrent access. That is, several concurrent processes can safely add and
 retrieve data from the queue. It is easy to realize that during the previous
-sections we already implemented that kind of functionality, it was
-embedded in our `producer` and `consumer` functions. To build a concurrent queue
-we only need to extract from those methods the part that handles the concurrent
-access. A possible implementation is given
+sections we already implemented that kind of functionality, it was implemented
+by the `take` and `offer` methods embedded in our `producer` and `consumer`
+functions. To build a concurrent queue we only need to extract from those
+methods the part that handles the concurrent access. As the last exercise we
+propose you to implement a concurrent queue that implements the `take` and
+`offer` functions, and then rewrite the `producer` and `consumer` to use your
+queue. A possible implementation of the queue is given
 [here](https://github.com/lrodero/cats-effect-tutorial/blob/series/3.x/src/main/scala/catseffecttutorial/producerconsumer/exerciseconcurrentqueue/Queue.scala),
 while the main program using that queue can be found
 [here](https://github.com/lrodero/cats-effect-tutorial/blob/series/3.x/src/main/scala/catseffecttutorial/producerconsumer/exerciseconcurrentqueue/Main.scala).
 
-As the last exercise we propose you to implement a concurrent queue that
-implements the `taker` and `offer` functions, and then rewrite the `producer`
-and `consumer` to user your implementation. When you are done, take a look to
-[Queue implementation in cats-effect std
-package](https://github.com/typelevel/cats-effect/blob/series/3.x/std/shared/src/main/scala/cats/effect/std/Queue.scala), you will notice your code is a simplified version of cats-effect own `Queue`!
+When you are done, take a look to [Queue implementation in cats-effect std
+package](https://github.com/typelevel/cats-effect/blob/series/3.x/std/shared/src/main/scala/cats/effect/std/Queue.scala),
+you will notice your code is a simplified version of cats-effect own `Queue`!
 
 ## Conclusion
 
